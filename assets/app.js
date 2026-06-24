@@ -1,0 +1,453 @@
+const {
+  useState,
+  useMemo,
+  useEffect
+} = React;
+const STORAGE_KEY = 'riceChecklistDraft:v1';
+const DEFAULT_HEADER_DATA = {
+  schoolName: '',
+  year: '115',
+  month: '4',
+  prevBalance: 677,
+  prevNotReceived: 1020,
+  thisMonthOrder: 1650
+};
+const createDefaultRows = () => Array.from({
+  length: 31
+}, (_, i) => ({
+  date: i + 1,
+  received: '',
+  students: '',
+  used: '',
+  filler: '營養師或午秘',
+  note: ''
+}));
+const getSaveTimeText = (date = new Date()) => date.toLocaleTimeString('zh-TW', {
+  hour: '2-digit',
+  minute: '2-digit'
+});
+const loadSavedDraft = () => {
+  try {
+    const rawDraft = window.localStorage.getItem(STORAGE_KEY);
+    if (!rawDraft) return null;
+    const savedDraft = JSON.parse(rawDraft);
+    const defaultRows = createDefaultRows();
+    const savedRows = Array.isArray(savedDraft.rows) ? savedDraft.rows : [];
+    return {
+      headerData: {
+        ...DEFAULT_HEADER_DATA,
+        ...(savedDraft.headerData || {})
+      },
+      rows: defaultRows.map((row, index) => ({
+        ...row,
+        ...(savedRows[index] || {}),
+        date: index + 1
+      })),
+      savedAt: savedDraft.savedAt || ''
+    };
+  } catch (error) {
+    console.warn('無法載入暫存資料', error);
+    return null;
+  }
+};
+const DownloadIcon = () => React.createElement("svg", {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: "18",
+  height: "18",
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: "2",
+  strokeLinecap: "round",
+  strokeLinejoin: "round"
+}, React.createElement("path", {
+  d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+}), React.createElement("polyline", {
+  points: "7 10 12 15 17 10"
+}), React.createElement("line", {
+  x1: "12",
+  y1: "15",
+  x2: "12",
+  y2: "3"
+}));
+const PrinterIcon = () => React.createElement("svg", {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: "18",
+  height: "18",
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: "2",
+  strokeLinecap: "round",
+  strokeLinejoin: "round"
+}, React.createElement("polyline", {
+  points: "6 9 6 2 18 2 18 9"
+}), React.createElement("path", {
+  d: "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
+}), React.createElement("rect", {
+  x: "6",
+  y: "14",
+  width: "12",
+  height: "8"
+}));
+const TrashIcon = () => React.createElement("svg", {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: "18",
+  height: "18",
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: "2",
+  strokeLinecap: "round",
+  strokeLinejoin: "round"
+}, React.createElement("polyline", {
+  points: "3 6 5 6 21 6"
+}), React.createElement("path", {
+  d: "M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+}), React.createElement("path", {
+  d: "M10 11v6"
+}), React.createElement("path", {
+  d: "M14 11v6"
+}), React.createElement("path", {
+  d: "M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"
+}));
+function App() {
+  const savedDraft = useMemo(() => loadSavedDraft(), []);
+  const [headerData, setHeaderData] = useState(savedDraft?.headerData || DEFAULT_HEADER_DATA);
+  const [rows, setRows] = useState(savedDraft?.rows || createDefaultRows());
+  const [saveStatus, setSaveStatus] = useState(savedDraft?.savedAt ? `已載入上次暫存：${getSaveTimeText(new Date(savedDraft.savedAt))}` : '輸入後會自動暫存');
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const savedAt = new Date();
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          headerData,
+          rows,
+          savedAt: savedAt.toISOString()
+        }));
+        setSaveStatus(`已自動暫存：${getSaveTimeText(savedAt)}`);
+      } catch (error) {
+        console.warn('無法暫存資料', error);
+        setSaveStatus('暫存失敗，請檢查瀏覽器設定');
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [headerData, rows]);
+  const calculatedData = useMemo(() => {
+    let yearNum = parseInt(headerData.year, 10);
+    let monthNum = parseInt(headerData.month, 10);
+    let daysInMonth = 31;
+    let gregorianYear = 2026;
+    let isValidDate = false;
+    if (!isNaN(yearNum) && !isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
+      gregorianYear = yearNum + 1911;
+      daysInMonth = new Date(gregorianYear, monthNum, 0).getDate();
+      isValidDate = true;
+    }
+    let runningBalance = Number(headerData.prevBalance) || 0;
+    let totalReceived = 0;
+    let totalUsed = 0;
+    const activeRows = rows.slice(0, daysInMonth);
+    const newRows = activeRows.map(row => {
+      const dateObj = new Date(gregorianYear, monthNum - 1, row.date);
+      const dayIndex = dateObj.getDay();
+      const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+      const dayOfWeek = isValidDate ? dayNames[dayIndex] : '';
+      const isWeekend = isValidDate ? dayIndex === 0 || dayIndex === 6 : false;
+      const receivedNum = isWeekend ? 0 : Number(row.received) || 0;
+      const usedNum = isWeekend ? 0 : Number(row.used) || 0;
+      runningBalance = runningBalance + receivedNum - usedNum;
+      totalReceived += receivedNum;
+      totalUsed += usedNum;
+      return {
+        ...row,
+        dayOfWeek,
+        dayIndex,
+        isWeekend,
+        balance: runningBalance,
+        isReceivedValid: receivedNum === 0 || receivedNum % 30 === 0
+      };
+    });
+    const currentNotReceived = (Number(headerData.prevNotReceived) || 0) + (Number(headerData.thisMonthOrder) || 0) - totalReceived;
+    return {
+      rows: newRows,
+      totalReceived,
+      totalUsed,
+      finalBalance: runningBalance,
+      currentNotReceived
+    };
+  }, [rows, headerData]);
+  const handleHeaderChange = e => {
+    const {
+      name,
+      value
+    } = e.target;
+    setHeaderData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+  const handleRowChange = (index, field, value) => {
+    const newRows = [...rows];
+    newRows[index][field] = value;
+    setRows(newRows);
+  };
+  const handleKeyDown = (e, currentIndex, field) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      let nextIndex = currentIndex + 1;
+      while (nextIndex < calculatedData.rows.length) {
+        if (!calculatedData.rows[nextIndex].isWeekend) {
+          const nextInput = document.getElementById(`${field}-input-${nextIndex}`);
+          if (nextInput) {
+            nextInput.focus();
+            nextInput.select();
+          }
+          break;
+        }
+        nextIndex++;
+      }
+    }
+  };
+  const handleExportCSV = () => {
+    let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+    const schoolTitle = headerData.schoolName ? headerData.schoolName : '___________學校';
+    csvContent += `${schoolTitle} ${headerData.year} 年 ${headerData.month} 月食米用量登記表\n`;
+    csvContent += `前月白米結存量,${headerData.prevBalance},公斤,前月尚未進貨量,${headerData.prevNotReceived},公斤\n`;
+    csvContent += `本月白米申購量,${headerData.thisMonthOrder},公斤\n\n`;
+    csvContent += `日期,星期,進貨量(公斤),供應學生人數,白米用量(公斤),白米結存量(公斤),填表人,備註\n`;
+    calculatedData.rows.forEach(row => {
+      const receivedVal = row.isWeekend ? '' : row.received;
+      const studentsVal = row.isWeekend ? '' : row.students;
+      const usedVal = row.isWeekend ? '' : row.used;
+      const noteVal = row.isWeekend && !row.note ? '假日' : row.note;
+      csvContent += `${row.date},${row.dayOfWeek},${receivedVal},${studentsVal},${usedVal},${row.balance},${row.filler},${noteVal}\n`;
+    });
+    csvContent += `合計,,${calculatedData.totalReceived},,${calculatedData.totalUsed},${calculatedData.finalBalance},,\n`;
+    csvContent += `本月尚未進貨數量,${calculatedData.currentNotReceived},公斤\n`;
+    csvContent += `填表人：,營養師或午秘\n`;
+    csvContent += `註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。\n`;
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${headerData.schoolName || '食米用量'}登記表_${headerData.year}年${headerData.month}月.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  const handlePrint = () => {
+    window.print();
+  };
+  const handleClearDraft = () => {
+    const confirmed = window.confirm('確定要清除這台電腦瀏覽器中的暫存資料嗎？目前畫面會恢復預設值。');
+    if (!confirmed) return;
+    window.localStorage.removeItem(STORAGE_KEY);
+    setHeaderData(DEFAULT_HEADER_DATA);
+    setRows(createDefaultRows());
+    setSaveStatus('已清除暫存');
+  };
+  return React.createElement("div", {
+    className: "min-h-screen bg-gray-50 p-2 md:p-4 font-sans text-gray-800 print:bg-white print:p-0"
+  }, React.createElement("div", {
+    className: "max-w-5xl mx-auto bg-white shadow-lg rounded-lg p-4 md:p-6 print:shadow-none print:p-0 print:max-w-full"
+  }, React.createElement("div", {
+    className: "flex flex-col md:flex-row md:justify-between md:items-center gap-3 mb-4 print:hidden"
+  }, React.createElement("div", null, React.createElement("h1", {
+    className: "text-xl font-bold text-gray-700"
+  }, "食米用量系統 (自動計算版)"), React.createElement("div", {
+    className: "mt-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 inline-flex"
+  }, saveStatus)), React.createElement("div", {
+    className: "flex flex-wrap md:justify-end gap-2 md:gap-3"
+  }, React.createElement("button", {
+    onClick: handleClearDraft,
+    className: "flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 px-3 py-1.5 md:px-4 md:py-2 rounded transition text-sm md:text-base"
+  }, React.createElement(TrashIcon, null), "清除暫存"), React.createElement("button", {
+    onClick: handleExportCSV,
+    className: "flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 md:px-4 md:py-2 rounded transition text-sm md:text-base"
+  }, React.createElement(DownloadIcon, null), "匯出 CSV"), React.createElement("button", {
+    onClick: handlePrint,
+    className: "flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 md:px-4 md:py-2 rounded transition text-sm md:text-base"
+  }, React.createElement(PrinterIcon, null), "列印"))), React.createElement("div", {
+    className: "text-center mb-2 print:mb-1"
+  }, React.createElement("div", {
+    className: "text-xl md:text-2xl print:text-lg font-bold flex items-center justify-center gap-1 mb-1"
+  }, React.createElement("input", {
+    type: "text",
+    name: "schoolName",
+    value: headerData.schoolName,
+    onChange: handleHeaderChange,
+    placeholder: "請輸入學校名稱",
+    className: "w-48 text-center border-b border-gray-400 focus:outline-none focus:border-blue-500 font-bold placeholder-gray-300 print:w-36 print:border-none print:px-0"
+  }), React.createElement("input", {
+    type: "text",
+    name: "year",
+    value: headerData.year,
+    onChange: handleHeaderChange,
+    className: "w-12 text-center border-b border-gray-400 focus:outline-none focus:border-blue-500 font-bold print:w-10 print:border-none print:px-0"
+  }), "年", React.createElement("input", {
+    type: "text",
+    name: "month",
+    value: headerData.month,
+    onChange: handleHeaderChange,
+    className: "w-8 text-center border-b border-gray-400 focus:outline-none focus:border-blue-500 font-bold print:w-6 print:border-none print:px-0"
+  }), "月食米用量登記表"), React.createElement("div", {
+    className: "text-xs text-gray-500 mb-2 print:mb-1"
+  }, "附件三(白米、糙米分張填寫)"), React.createElement("div", {
+    className: "flex flex-wrap justify-between items-center px-2 text-sm print:text-xs"
+  }, React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, React.createElement("span", {
+    className: "font-semibold text-blue-700"
+  }, "前月白米結存量"), React.createElement("input", {
+    type: "number",
+    name: "prevBalance",
+    value: headerData.prevBalance,
+    onChange: handleHeaderChange,
+    className: "w-16 text-center border-b border-gray-400 focus:outline-none print:border-none print:font-bold"
+  }), React.createElement("span", null, "公斤")), React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, React.createElement("span", {
+    className: "font-semibold text-red-700"
+  }, "前月尚未進貨量"), React.createElement("input", {
+    type: "number",
+    name: "prevNotReceived",
+    value: headerData.prevNotReceived,
+    onChange: handleHeaderChange,
+    className: "w-16 text-center border-b border-gray-400 focus:outline-none print:border-none print:font-bold"
+  }), React.createElement("span", null, "公斤")), React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, React.createElement("span", {
+    className: "font-semibold"
+  }, "本月白米申購量"), React.createElement("input", {
+    type: "number",
+    name: "thisMonthOrder",
+    value: headerData.thisMonthOrder,
+    onChange: handleHeaderChange,
+    className: "w-16 text-center border-b border-gray-400 focus:outline-none print:border-none print:font-bold"
+  }), React.createElement("span", null, "公斤。")))), React.createElement("div", {
+    className: "border-2 border-gray-800 print:border"
+  }, React.createElement("table", {
+    className: "w-full text-center border-collapse text-sm print:text-[11px]"
+  }, React.createElement("thead", null, React.createElement("tr", {
+    className: "bg-gray-100 print:bg-gray-100/50"
+  }, React.createElement("th", {
+    className: "border border-gray-800 py-1 w-10"
+  }, "日期"), React.createElement("th", {
+    className: "border border-gray-800 py-1 w-10"
+  }, "星期"), React.createElement("th", {
+    className: "border border-gray-800 py-1 bg-pink-100 print:bg-pink-50 w-20"
+  }, "進貨量", React.createElement("br", null), React.createElement("span", {
+    className: "text-[10px] font-normal text-red-600 print:hidden"
+  }, "(須為30倍數)")), React.createElement("th", {
+    className: "border border-gray-800 py-1 w-24"
+  }, "供應學生人數"), React.createElement("th", {
+    className: "border border-gray-800 py-1 bg-green-50 w-20"
+  }, "白米用量", React.createElement("br", null), "(公斤)"), React.createElement("th", {
+    className: "border border-gray-800 py-1 w-20"
+  }, "白米結存量", React.createElement("br", null), "(公斤)"), React.createElement("th", {
+    className: "border border-gray-800 py-1 w-28"
+  }, "填表人"), React.createElement("th", {
+    className: "border border-gray-800 py-1 w-20"
+  }, "備註"))), React.createElement("tbody", null, calculatedData.rows.map((row, index) => {
+    const rowBgClass = row.isWeekend ? 'bg-gray-200 text-gray-500 print:bg-gray-100' : 'hover:bg-gray-50';
+    const dayColorClass = row.dayIndex === 0 ? 'text-red-600 font-bold' : row.dayIndex === 6 ? 'text-green-700 font-bold' : '';
+    return React.createElement("tr", {
+      key: row.date,
+      className: rowBgClass
+    }, React.createElement("td", {
+      className: "border border-gray-800 font-semibold py-0.5 print:py-0"
+    }, row.date), React.createElement("td", {
+      className: `border border-gray-800 py-0.5 print:py-0 ${dayColorClass}`
+    }, row.dayOfWeek), React.createElement("td", {
+      className: `border border-gray-800 ${!row.isReceivedValid && !row.isWeekend ? 'bg-red-50' : ''}`
+    }, React.createElement("input", {
+      id: `received-input-${index}`,
+      type: "number",
+      value: row.received,
+      disabled: row.isWeekend,
+      onChange: e => handleRowChange(index, 'received', e.target.value),
+      onKeyDown: e => handleKeyDown(e, index, 'received'),
+      className: `w-full text-center py-0.5 px-1 bg-transparent focus:outline-none focus:bg-yellow-50 text-sm print:text-[11px] print:py-0 ${!row.isReceivedValid && !row.isWeekend ? 'text-red-600 font-bold' : ''} ${row.isWeekend ? 'cursor-not-allowed opacity-0 print:hidden' : ''}`
+    })), React.createElement("td", {
+      className: "border border-gray-800"
+    }, React.createElement("input", {
+      id: `students-input-${index}`,
+      type: "number",
+      value: row.students,
+      disabled: row.isWeekend,
+      onChange: e => handleRowChange(index, 'students', e.target.value),
+      onKeyDown: e => handleKeyDown(e, index, 'students'),
+      className: `w-full text-center py-0.5 px-1 bg-transparent focus:outline-none focus:bg-yellow-50 text-sm print:text-[11px] print:py-0 ${row.isWeekend ? 'cursor-not-allowed opacity-0 print:hidden' : ''}`
+    })), React.createElement("td", {
+      className: "border border-gray-800"
+    }, React.createElement("input", {
+      id: `used-input-${index}`,
+      type: "number",
+      value: row.used,
+      disabled: row.isWeekend,
+      onChange: e => handleRowChange(index, 'used', e.target.value),
+      onKeyDown: e => handleKeyDown(e, index, 'used'),
+      className: `w-full text-center py-0.5 px-1 bg-transparent focus:outline-none focus:bg-yellow-50 text-sm print:text-[11px] print:py-0 ${row.isWeekend ? 'cursor-not-allowed opacity-0 print:hidden' : ''}`
+    })), React.createElement("td", {
+      className: "border border-gray-800 font-bold text-blue-800 bg-gray-50/50 print:bg-transparent"
+    }, row.balance), React.createElement("td", {
+      className: "border border-gray-800"
+    }, React.createElement("input", {
+      id: `filler-input-${index}`,
+      type: "text",
+      value: row.filler,
+      disabled: row.isWeekend,
+      onChange: e => handleRowChange(index, 'filler', e.target.value),
+      onKeyDown: e => handleKeyDown(e, index, 'filler'),
+      className: `w-full text-center py-0.5 px-1 bg-transparent focus:outline-none focus:bg-yellow-50 font-medium tracking-wider text-sm print:text-[11px] print:py-0 ${row.isWeekend ? 'text-transparent cursor-not-allowed print:hidden' : 'text-gray-400'}`
+    })), React.createElement("td", {
+      className: "border border-gray-800"
+    }, row.isWeekend ? React.createElement("div", {
+      className: "w-full text-center py-0.5 text-xs text-gray-500 font-bold print:py-0 print:text-[10px]"
+    }, "假日") : React.createElement("input", {
+      id: `note-input-${index}`,
+      type: "text",
+      value: row.note,
+      onChange: e => handleRowChange(index, 'note', e.target.value),
+      onKeyDown: e => handleKeyDown(e, index, 'note'),
+      className: "w-full text-left py-0.5 px-1 bg-transparent focus:outline-none focus:bg-yellow-50 text-sm print:text-[11px] print:py-0"
+    })));
+  }), React.createElement("tr", {
+    className: "bg-gray-100 font-bold border-t-2 border-gray-800 print:bg-gray-50"
+  }, React.createElement("td", {
+    className: "border border-gray-800 py-1",
+    colSpan: "2"
+  }, "合計"), React.createElement("td", {
+    className: "border border-gray-800 py-1 text-red-700"
+  }, calculatedData.totalReceived || ''), React.createElement("td", {
+    className: "border border-gray-800 py-1"
+  }), React.createElement("td", {
+    className: "border border-gray-800 py-1 text-green-700"
+  }, calculatedData.totalUsed || ''), React.createElement("td", {
+    className: "border border-gray-800 py-1 text-blue-800"
+  }, calculatedData.finalBalance), React.createElement("td", {
+    className: "border border-gray-800 py-1"
+  }), React.createElement("td", {
+    className: "border border-gray-800 py-1"
+  }))))), React.createElement("div", {
+    className: "mt-2 px-2 print:mt-1"
+  }, React.createElement("div", {
+    className: "flex justify-between items-end mb-1"
+  }, React.createElement("div", {
+    className: "flex items-center gap-2 text-sm print:text-xs"
+  }, React.createElement("span", {
+    className: "font-bold text-orange-900"
+  }, "本月尚未進貨數量"), React.createElement("span", {
+    className: "text-lg print:text-base font-bold text-red-600 underline underline-offset-4 px-2"
+  }, calculatedData.currentNotReceived), React.createElement("span", {
+    className: "font-bold"
+  }, "公斤。")), React.createElement("div", {
+    className: "flex items-center gap-2 font-bold text-sm print:text-xs"
+  }, "填表人： ", React.createElement("span", {
+    className: "border-b border-gray-800 px-6 min-w-[120px] text-gray-400 text-center font-medium tracking-widest"
+  }, "營養師或午秘"))), React.createElement("div", {
+    className: "text-xs font-semibold text-gray-600 print:text-[10px]"
+  }, "註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。"))));
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App, null));
