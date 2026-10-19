@@ -30,6 +30,12 @@
         padding: 0 !important;
         height: auto !important;
       }
+      /* 併入上月日子、超過 31 列時縮小行距，維持一張 A4 */
+      .dense-print td, .dense-print th,
+      .dense-print input, .dense-print span {
+        font-size: 10px !important;
+        line-height: 1.45 !important;
+      }
       /* 提示文字不要印出來 */
       input::placeholder {
         color: transparent !important;

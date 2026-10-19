@@ -27,8 +27,11 @@ const createEmptySheet = () => ({
   prevBalance: '',
   prevNotReceived: '',
   thisMonthOrder: '',
+  mergeFrom: '',
+  // 併入上個月的起始日（例如開學日 8/31 併入 9 月表）；空白表示不併入
   days: {}
 });
+const sheetHasData = sheet => !!sheet && (sheet.prevBalance !== '' || sheet.prevNotReceived !== '' || sheet.thisMonthOrder !== '' || Object.values(sheet.days || {}).some(d => d.received !== '' || d.students !== '' || d.used !== ''));
 const EMPTY_SHEET = createEmptySheet();
 const pad = n => String(n).padStart(2, '0');
 const num = v => v === '' || v == null ? 0 : Number(v) || 0;
@@ -165,25 +168,64 @@ const getAutoDayInfo = (gregorianYear, month, date) => {
     autoOff
   };
 };
+const daysInMonthOf = (year, month) => new Date(year + 1911, month, 0).getDate();
+const getMergeInfo = (sheet, year, month) => {
+  const [prevYear, prevMonth] = shiftMonth(year, month, -1);
+  const from = num(sheet.mergeFrom);
+  const prevDays = daysInMonthOf(prevYear, prevMonth);
+  return {
+    merged: from >= 1 && from <= prevDays,
+    from,
+    prevYear,
+    prevMonth,
+    prevDays
+  };
+};
+const getPeriodText = (sheet, year, month) => {
+  const m = getMergeInfo(sheet, year, month);
+  if (!m.merged) return `${year} 年 ${month} 月`;
+  if (m.prevYear === year) return `${year} 年 ${m.prevMonth}～${month} 月`;
+  return `${m.prevYear} 年 ${m.prevMonth} 月～${year} 年 ${month} 月`;
+};
 const computeSheet = (sheet, year, month) => {
-  const gregorianYear = year + 1911;
-  const daysInMonth = new Date(gregorianYear, month, 0).getDate();
+  const merge = getMergeInfo(sheet, year, month);
+  // 每一列：key 是 days 裡的索引（本月用日期數字，併入的上月日子用 p+日期）
+  const entries = [];
+  if (merge.merged) {
+    for (let d = merge.from; d <= merge.prevDays; d++) entries.push({
+      key: `p${d}`,
+      y: merge.prevYear,
+      m: merge.prevMonth,
+      d
+    });
+  }
+  for (let d = 1; d <= daysInMonthOf(year, month); d++) entries.push({
+    key: String(d),
+    y: year,
+    m: month,
+    d
+  });
   let balance = num(sheet.prevBalance);
   let totalReceived = 0;
   let totalUsed = 0;
   const issues = [];
   let firstNegativeDate = null;
   const rows = [];
-  for (let date = 1; date <= daysInMonth; date++) {
+  for (const entry of entries) {
+    const {
+      key
+    } = entry;
+    const date = merge.merged ? `${entry.m}/${entry.d}` : entry.d;
+    const where = merge.merged ? date : `${date} 日`;
     const day = {
       ...EMPTY_DAY,
-      ...(sheet.days[date] || {})
+      ...(sheet.days[key] || {})
     };
     const {
       dow,
       holiday,
       autoOff
-    } = getAutoDayInfo(gregorianYear, month, date);
+    } = getAutoDayInfo(entry.y + 1911, entry.m, entry.d);
     const isOff = day.dayType === 'off' || day.dayType !== 'school' && autoOff;
     const offLabel = holiday || (dow === 0 || dow === 6 ? '假日' : '放假');
     const hasData = day.received !== '' || day.students !== '' || day.used !== '';
@@ -194,15 +236,17 @@ const computeSheet = (sheet, year, month) => {
     totalUsed += used;
     const isReceivedValid = received === 0 || received % 30 === 0;
     if (!isOff) {
-      if (!isReceivedValid) issues.push(`${date} 日進貨量 ${received} 不是 30 的倍數`);
-      if (day.used !== '' && day.students === '') issues.push(`${date} 日有用量但沒填供應人數`);
-      if (day.students !== '' && day.used === '') issues.push(`${date} 日有供應人數但沒填用量`);
-      if (num(day.received) < 0 || num(day.used) < 0 || num(day.students) < 0) issues.push(`${date} 日有負數`);
+      if (!isReceivedValid) issues.push(`${where}進貨量 ${received} 不是 30 的倍數`);
+      if (day.used !== '' && day.students === '') issues.push(`${where}有用量但沒填供應人數`);
+      if (day.students !== '' && day.used === '') issues.push(`${where}有供應人數但沒填用量`);
+      if (num(day.received) < 0 || num(day.used) < 0 || num(day.students) < 0) issues.push(`${where}有負數`);
     } else if (hasData) {
-      issues.push(`${date} 日是放假日，填的數字沒有計入（如果這天有上課，請點星期欄改成上課日）`);
+      issues.push(`${where}是放假日，填的數字沒有計入（如果這天有上課，請點星期欄改成上課日）`);
     }
-    if (balance < 0 && firstNegativeDate === null) firstNegativeDate = date;
+    if (balance < 0 && firstNegativeDate === null) firstNegativeDate = where;
     rows.push({
+      key,
+      index: rows.length,
       date,
       day,
       dow,
@@ -216,7 +260,7 @@ const computeSheet = (sheet, year, month) => {
       isReceivedValid
     });
   }
-  if (firstNegativeDate !== null) issues.unshift(`${firstNegativeDate} 日起結存量變成負數，請檢查進貨量或前月結存量`);
+  if (firstNegativeDate !== null) issues.unshift(`${firstNegativeDate}起結存量變成負數，請檢查進貨量或前月結存量`);
   const currentNotReceived = num(sheet.prevNotReceived) + num(sheet.thisMonthOrder) - totalReceived;
   if (currentNotReceived < 0) issues.push(`本月尚未進貨數量是負數（${currentNotReceived}），進貨總量超過前月未進貨＋本月申購`);
   return {
@@ -225,6 +269,7 @@ const computeSheet = (sheet, year, month) => {
     totalUsed,
     finalBalance: balance,
     currentNotReceived,
+    merged: merge.merged,
     issues
   };
 };
@@ -342,10 +387,39 @@ function App() {
   const riceName = RICE_TYPES[riceType];
   const currentKey = sheetKey(year, month, riceType);
   const sheet = store.sheets[currentKey] || EMPTY_SHEET;
-  const calc = useMemo(() => computeSheet(sheet, year, month), [sheet, year, month]);
-  const [prevYear, prevMonth] = shiftMonth(year, month, -1);
-  const prevSheet = store.sheets[sheetKey(prevYear, prevMonth, riceType)];
+  const merge = getMergeInfo(sheet, year, month);
+  const periodText = getPeriodText(sheet, year, month);
+  const calc = useMemo(() => {
+    const result = computeSheet(sheet, year, month);
+    // 併入的上月日子如果在上月的表也有填，會重複計算
+    const mergedFromSheet = merge.merged && store.sheets[sheetKey(merge.prevYear, merge.prevMonth, riceType)];
+    if (mergedFromSheet) {
+      const dup = [];
+      for (let d = merge.from; d <= merge.prevDays; d++) {
+        const day = mergedFromSheet.days[d];
+        if (day && (day.received !== '' || day.students !== '' || day.used !== '')) dup.push(`${merge.prevMonth}/${d}`);
+      }
+      if (dup.length) result.issues.unshift(`${dup.join('、')} 在 ${merge.prevMonth} 月的表也有資料，會重複計算，請刪掉其中一邊`);
+    }
+    return result;
+  }, [sheet, year, month, store.sheets, riceType]);
+
+  // 前月結存從「最近一個有資料的月份」帶入（例如暑假 7、8 月沒有表，就從 6 月帶）
+  let prevYear = null;
+  let prevMonth = null;
+  let prevSheet = null;
+  for (let back = 1; back <= 24; back++) {
+    const [y, m] = shiftMonth(year, month, -back);
+    const candidate = store.sheets[sheetKey(y, m, riceType)];
+    if (sheetHasData(candidate)) {
+      prevYear = y;
+      prevMonth = m;
+      prevSheet = candidate;
+      break;
+    }
+  }
   const prevCalc = useMemo(() => prevSheet ? computeSheet(prevSheet, prevYear, prevMonth) : null, [prevSheet, prevYear, prevMonth]);
+  const prevPeriodText = prevSheet ? getPeriodText(prevSheet, prevYear, prevMonth) : '';
   const canCarryFromPrev = !!prevCalc && (String(sheet.prevBalance) !== String(prevCalc.finalBalance) || String(sheet.prevNotReceived) !== String(prevCalc.currentNotReceived));
   const holidayYearStatus = HOLIDAY_YEARS[year + 1911];
   const savedMonths = Object.keys(store.sheets).filter(key => key.endsWith(`-${riceType}`)).map(parseSheetKey).sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month));
@@ -384,13 +458,13 @@ function App() {
     ...sh,
     [field]: value
   }));
-  const updateDay = (date, field, value) => updateSheet(sh => ({
+  const updateDay = (key, field, value) => updateSheet(sh => ({
     ...sh,
     days: {
       ...sh.days,
-      [date]: {
+      [key]: {
         ...EMPTY_DAY,
-        ...(sh.days[date] || {}),
+        ...(sh.days[key] || {}),
         [field]: value
       }
     }
@@ -447,7 +521,7 @@ function App() {
   const toggleDayType = row => {
     let next;
     if (row.isOff) next = row.autoOff ? 'school' : 'auto';else next = row.autoOff ? 'auto' : 'off';
-    updateDay(row.date, 'dayType', next);
+    updateDay(row.key, 'dayType', next);
   };
   const clearMonth = () => {
     if (!store.sheets[currentKey]) return;
@@ -467,15 +541,15 @@ function App() {
 
   // ----- 鍵盤：Enter / ↓ 往下，↑ 往上，自動跳過放假日 -----
 
-  const handleKeyDown = (e, date, field) => {
+  const handleKeyDown = (e, index, field) => {
     let dir = 0;
     if (e.key === 'Enter' || e.key === 'ArrowDown') dir = 1;
     if (e.key === 'ArrowUp') dir = -1;
     if (!dir) return;
     e.preventDefault();
-    for (let d = date + dir; d >= 1 && d <= calc.rows.length; d += dir) {
-      if (calc.rows[d - 1].isOff) continue;
-      const el = document.getElementById(`${field}-${d}`);
+    for (let i = index + dir; i >= 0 && i < calc.rows.length; i += dir) {
+      if (calc.rows[i].isOff) continue;
+      const el = document.getElementById(`${field}-${calc.rows[i].key}`);
       if (el) {
         el.focus();
         el.select();
@@ -490,7 +564,7 @@ function App() {
   const schoolTitle = store.settings.schoolName || '';
   const handleExportCSV = () => {
     let csv = '﻿';
-    csv += csvLine([`${schoolTitle || '___________'}學校 ${year} 年 ${month} 月食米用量登記表（${riceName}）`]);
+    csv += csvLine([`${schoolTitle || '___________'}學校 ${periodText}食米用量登記表（${riceName}）`]);
     csv += csvLine([`前月${riceName}結存量`, sheet.prevBalance, '公斤', '前月尚未進貨量', sheet.prevNotReceived, '公斤']);
     csv += csvLine([`本月${riceName}申購量`, sheet.thisMonthOrder, '公斤']);
     csv += '\r\n';
@@ -505,7 +579,7 @@ function App() {
     csv += csvLine(['註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。']);
     downloadBlob(new Blob([csv], {
       type: 'text/csv;charset=utf-8'
-    }), `${schoolTitle || '食米用量'}登記表_${year}年${month}月_${riceName}.csv`);
+    }), `${schoolTitle || '食米用量'}登記表_${periodText.replace(/ /g, '')}_${riceName}.csv`);
   };
   const handleBackup = () => {
     const now = new Date();
@@ -563,13 +637,13 @@ function App() {
     return h('td', {
       className: `${cell} ${extraTd}`
     }, h('input', {
-      id: `${field}-${r.date}`,
+      id: `${field}-${r.key}`,
       type: 'number',
       min: '0',
       inputMode: 'decimal',
       value: r.day[field],
-      onChange: e => updateDay(r.date, field, e.target.value),
-      onKeyDown: e => handleKeyDown(e, r.date, field),
+      onChange: e => updateDay(r.key, field, e.target.value),
+      onKeyDown: e => handleKeyDown(e, r.index, field),
       onWheel: blockWheel,
       className: `${inputBase} ${extraInput}`
     }));
@@ -577,12 +651,12 @@ function App() {
   const textCell = (r, field, printValue, placeholder, align = 'text-center') => h('td', {
     className: cell
   }, h('input', {
-    id: `${field}-${r.date}`,
+    id: `${field}-${r.key}`,
     type: 'text',
     value: r.day[field],
     placeholder,
-    onChange: e => updateDay(r.date, field, e.target.value),
-    onKeyDown: e => handleKeyDown(e, r.date, field),
+    onChange: e => updateDay(r.key, field, e.target.value),
+    onKeyDown: e => handleKeyDown(e, r.index, field),
     className: `${inputBase} ${align} placeholder-gray-400 print:hidden`
   }), h('span', {
     className: `hidden print:block ${align} text-[11px] px-1`
@@ -679,7 +753,19 @@ function App() {
       riceType: type
     }),
     className: `px-3 py-1.5 ${riceType === type ? 'bg-gray-700 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`
-  }, name))), savedMonths.length > 0 && h('select', {
+  }, name))), h('select', {
+    value: merge.merged ? String(merge.from) : '',
+    onChange: e => setHeaderField('mergeFrom', e.target.value),
+    title: '開學日在上個月底時，可以把那幾天併到這張表，例如 8/31 開學併入 9 月',
+    className: `border rounded px-2 py-1.5 ${merge.merged ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-300 bg-white'}`
+  }, h('option', {
+    value: ''
+  }, `不併入 ${merge.prevMonth} 月`), Array.from({
+    length: 10
+  }, (_, i) => merge.prevDays - i).map(d => h('option', {
+    key: d,
+    value: String(d)
+  }, `併入 ${merge.prevMonth}/${d} 起（開學日）`))), savedMonths.length > 0 && h('select', {
     value: store.sheets[currentKey] ? currentKey : '',
     onChange: e => e.target.value && setCurrent(parseSheetKey(e.target.value)),
     className: 'border border-gray-300 rounded px-2 py-1.5 bg-white'
@@ -688,7 +774,7 @@ function App() {
   }, `已存的${riceName}月份…`), savedMonths.map(m => h('option', {
     key: sheetKey(m.year, m.month, m.riceType),
     value: sheetKey(m.year, m.month, m.riceType)
-  }, `${m.year} 年 ${m.month} 月`))), h('div', {
+  }, getPeriodText(store.sheets[sheetKey(m.year, m.month, m.riceType)], m.year, m.month)))), h('div', {
     className: 'flex-1'
   }), h('button', {
     onClick: startNextMonth,
@@ -702,10 +788,10 @@ function App() {
     className: 'text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1'
   }, `${year} 年的國定假日是推估的，請以人事行政總處公告為準，不同的日子請點星期欄調整。`), canCarryFromPrev && h('div', {
     className: 'flex flex-wrap items-center gap-2 text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded px-2 py-1.5'
-  }, `上月（${prevYear} 年 ${prevMonth} 月）結存 ${prevCalc.finalBalance} 公斤、尚未進貨 ${prevCalc.currentNotReceived} 公斤，跟本月表頭不同。`, h('button', {
+  }, `最近有資料的月份（${prevPeriodText}）結存 ${prevCalc.finalBalance} 公斤、尚未進貨 ${prevCalc.currentNotReceived} 公斤，跟本月表頭不同。`, h('button', {
     onClick: carryFromPrev,
     className: 'px-2 py-0.5 rounded bg-blue-600 text-white text-xs hover:bg-blue-700'
-  }, '帶入上月數字')), h('div', {
+  }, '帶入這些數字')), h('div', {
     className: `text-sm rounded px-2 py-1.5 border ${calc.issues.length ? 'text-red-800 bg-red-50 border-red-200' : 'text-emerald-800 bg-emerald-50 border-emerald-200'}`
   }, calc.issues.length ? h('div', null, h('div', {
     className: 'font-bold mb-0.5'
@@ -726,7 +812,7 @@ function App() {
     className: 'w-56 text-center border-b border-gray-400 focus:outline-none focus:border-blue-500 font-bold placeholder-gray-300 print:hidden'
   }), h('span', {
     className: 'hidden print:inline'
-  }, schoolTitle || '＿＿＿＿＿＿＿'), h('span', null, `${year} 年 ${month} 月食米用量登記表`)), h('div', {
+  }, schoolTitle || '＿＿＿＿＿＿＿'), h('span', null, `${periodText}食米用量登記表`)), h('div', {
     className: 'text-xs text-gray-500 mb-2 print:mb-1'
   }, `附件三（白米、糙米分張填寫）　本張：${riceName}`), h('div', {
     className: 'flex flex-wrap justify-between items-center gap-2 px-2 text-sm print:text-xs'
@@ -734,11 +820,11 @@ function App() {
   const table = h('div', {
     className: 'border-2 border-gray-800 print:border'
   }, h('table', {
-    className: 'w-full text-center border-collapse text-sm print:text-[11px]'
+    className: `w-full text-center border-collapse text-sm print:text-[11px] ${calc.rows.length > 31 ? 'dense-print' : ''}`
   }, h('thead', null, h('tr', {
     className: 'bg-gray-100 print:bg-gray-100/50'
   }, h('th', {
-    className: `${cell} py-1 w-10`
+    className: `${cell} py-1 ${calc.merged ? 'w-12' : 'w-10'}`
   }, '日期'), h('th', {
     className: `${cell} py-1 w-10`
   }, '星期'), h('th', {
@@ -762,7 +848,7 @@ function App() {
     const notePrint = r.day.note || (r.isOff ? r.offLabel : '');
     const notePlaceholder = r.isOff ? r.offLabel : r.autoOff ? '上課日' : '';
     return h('tr', {
-      key: r.date,
+      key: r.key,
       className: rowClass
     }, h('td', {
       className: `${cell} font-semibold py-0.5 print:py-0`
