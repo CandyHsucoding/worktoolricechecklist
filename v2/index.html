@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>食米用量登記表 v2</title>
+
+  <!-- 與舊版共用 Tailwind / React -->
+  <script src="../assets/vendor/tailwindcss.js"></script>
+  <script src="../assets/vendor/react.production.min.js"></script>
+  <script src="../assets/vendor/react-dom.production.min.js"></script>
+
+  <style>
+    /* 隱藏數字欄位的上下箭頭 */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+
+    /* 列印時強制顯示背景顏色並設定 A4 邊界 */
+    @media print {
+      body {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      @page {
+        size: A4 portrait;
+        margin: 0.8cm;
+      }
+      input {
+        padding: 0 !important;
+        height: auto !important;
+      }
+      /* 提示文字不要印出來 */
+      input::placeholder {
+        color: transparent !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="holidays.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
