@@ -571,7 +571,9 @@ function App() {
   const [saveStatus, setSaveStatus] = useState(initial.message);
   const skipSave = useRef(!initial.needsSave);
   const fileInputRef = useRef(null);
-  const [vacation, setVacation] = useState(null); // 寒暑假設定面板：{ start, end, name }
+  const [vacation, setVacation] = useState(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [showHelp, setShowHelp] = useState(false); // 寒暑假設定面板：{ start, end, name }
   useEffect(() => {
     if (skipSave.current) {
       skipSave.current = false;
@@ -635,7 +637,6 @@ function App() {
   const prevPeriodText = prevSheet ? getPeriodText(prevSheet, prevYear, prevMonth) : '';
   const canCarryFromPrev = !!prevCalc && (String(sheet.prevBalance) !== String(prevCalc.finalBalance) || String(sheet.prevNotReceived) !== String(prevCalc.currentNotReceived));
   const holidayYearStatus = HOLIDAY_YEARS[year + 1911];
-  const savedMonths = Object.keys(store.sheets).filter(key => key.endsWith(`-${riceType}`)).map(parseSheetKey).sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month));
   const yearOptions = [];
   for (let y = todayROC().year - 3; y <= todayROC().year + 2; y++) yearOptions.push(y);
   if (!yearOptions.includes(year)) yearOptions.push(year);
@@ -1058,9 +1059,21 @@ function App() {
 
   // ----- 畫面組合 -----
 
-  const toolbar = h('div', {
-    className: 'print:hidden mb-4 space-y-3'
-  }, h('div', {
+  const sectionLabel = text => h('span', {
+    className: 'w-16 shrink-0 text-xs font-bold text-gray-500'
+  }, text);
+  const selectClass = 'border border-gray-300 rounded px-2 py-1.5 bg-white';
+  const monthHasData = m => sheetHasData(store.sheets[sheetKey(year, m, riceType)]);
+  const moreMenuItem = (icon, label, onClick, opts = {}) => h('button', {
+    onClick: () => {
+      setMoreOpen(false);
+      onClick();
+    },
+    disabled: opts.disabled,
+    title: opts.title,
+    className: `w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed ${opts.danger ? 'text-red-600' : 'text-gray-700'}`
+  }, h(icon), label);
+  const header = h('div', {
     className: 'flex flex-col md:flex-row md:justify-between md:items-center gap-3'
   }, h('div', null, h('h1', {
     className: 'text-xl font-bold text-gray-700'
@@ -1072,7 +1085,7 @@ function App() {
   }, '回舊版')), h('div', {
     className: 'mt-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 inline-flex'
   }, saveStatus)), h('div', {
-    className: 'flex flex-wrap md:justify-end gap-2'
+    className: 'flex flex-wrap md:justify-end items-center gap-2'
   }, h('button', {
     onClick: handlePrint,
     className: `${btn} bg-blue-600 hover:bg-blue-700 text-white border-blue-600`
@@ -1080,31 +1093,40 @@ function App() {
     onClick: handleExportExcel,
     className: btnGray,
     title: '把本月的表存成 Excel 檔，格式跟紙本一樣'
-  }, h(DownloadIcon), '匯出 Excel'), h('button', {
-    onClick: handleBackup,
+  }, h(DownloadIcon), '匯出 Excel'), h('div', {
+    className: 'relative'
+  }, h('button', {
+    onClick: () => setMoreOpen(!moreOpen),
     className: btnGray,
+    'aria-expanded': moreOpen
+  }, '更多 ▾'), moreOpen && h('div', {
+    className: 'fixed inset-0 z-10',
+    onClick: () => setMoreOpen(false)
+  }), moreOpen && h('div', {
+    className: 'absolute right-0 mt-1 w-56 z-20 bg-white border border-gray-200 rounded shadow-lg py-1'
+  }, moreMenuItem(DownloadIcon, '備份（全部月份）', handleBackup, {
     title: '把所有月份存成一個 Excel 檔，可在別台電腦用「還原」讀回來'
-  }, h(DownloadIcon), '備份'), h('button', {
-    onClick: () => fileInputRef.current && fileInputRef.current.click(),
-    className: btnGray
-  }, h(UploadIcon), '還原'), h('input', {
+  }), moreMenuItem(UploadIcon, '還原', () => fileInputRef.current && fileInputRef.current.click()), h('div', {
+    className: 'my-1 border-t border-gray-100'
+  }), moreMenuItem(TrashIcon, '清除本月', clearMonth, {
+    danger: true,
+    disabled: !store.sheets[currentKey]
+  }))), h('input', {
     ref: fileInputRef,
     type: 'file',
     accept: '.xlsx,.json',
     className: 'hidden',
     onChange: handleRestore
-  }), h('button', {
-    onClick: clearMonth,
-    disabled: !store.sheets[currentKey],
-    className: `${btnGray} disabled:opacity-40 disabled:cursor-not-allowed`
-  }, h(TrashIcon), '清除本月'))), IS_EMBEDDED_BROWSER && h('div', {
+  })));
+  const embeddedNotice = IS_EMBEDDED_BROWSER && h('div', {
     className: 'flex flex-wrap items-center gap-2 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded px-2 py-1.5'
-  }, '目前在 Claude 應用程式內建的瀏覽器開啟，這裡不能列印。請用 Chrome 或 Edge 開啟本網址；資料只存在各自的瀏覽器，請先按「備份」，再到 Chrome / Edge 按「還原」。', h('button', {
+  }, '目前在 Claude 應用程式內建的瀏覽器開啟，這裡不能列印。請用 Chrome 或 Edge 開啟本網址；資料只存在各自的瀏覽器，請先按「更多 → 備份」，再到 Chrome / Edge 按「還原」。', h('button', {
     onClick: copyPageUrl,
     className: 'px-2 py-0.5 rounded bg-amber-600 text-white text-xs hover:bg-amber-700'
-  }, '複製網址')), h('div', {
-    className: 'flex flex-wrap items-center gap-2 bg-gray-50 border border-gray-200 rounded p-2 text-sm'
-  }, h('button', {
+  }, '複製網址'));
+  const monthRow = h('div', {
+    className: 'flex flex-wrap items-center gap-2 px-3 py-2'
+  }, sectionLabel('月份'), h('button', {
     onClick: () => goMonth(-1),
     className: btnGray,
     title: '上個月'
@@ -1113,7 +1135,7 @@ function App() {
     onChange: e => setCurrent({
       year: Number(e.target.value)
     }),
-    className: 'border border-gray-300 rounded px-2 py-1.5 bg-white'
+    className: selectClass
   }, yearOptions.map(y => h('option', {
     key: y,
     value: y
@@ -1122,38 +1144,36 @@ function App() {
     onChange: e => setCurrent({
       month: Number(e.target.value)
     }),
-    className: 'border border-gray-300 rounded px-2 py-1.5 bg-white'
+    title: '有 ● 的月份已經有資料',
+    className: selectClass
   }, Array.from({
     length: 12
   }, (_, i) => h('option', {
     key: i + 1,
     value: i + 1
-  }, `${i + 1} 月`))), h('button', {
+  }, `${i + 1} 月${monthHasData(i + 1) ? ' ●' : ''}`))), h('button', {
     onClick: () => goMonth(1),
     className: btnGray,
     title: '下個月'
   }, '▶'), h('div', {
-    className: 'flex rounded border border-gray-300 overflow-hidden ml-1'
+    className: 'flex rounded border border-gray-300 overflow-hidden ml-2'
   }, Object.entries(RICE_TYPES).map(([type, name]) => h('button', {
     key: type,
     onClick: () => setCurrent({
       riceType: type
     }),
     className: `px-3 py-1.5 ${riceType === type ? 'bg-gray-700 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`
-  }, name))), h('select', {
-    value: merge.merged ? String(merge.from) : '',
-    onChange: e => setHeaderField('mergeFrom', e.target.value),
-    title: '開學日在上個月底時，可以把那幾天併到這張表，例如 8/31 開學併入 9 月',
-    className: `border rounded px-2 py-1.5 ${merge.merged ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-300 bg-white'}`
-  }, h('option', {
-    value: ''
-  }, `不併入 ${merge.prevMonth} 月`), Array.from({
-    length: 10
-  }, (_, i) => merge.prevDays - i).map(d => h('option', {
-    key: d,
-    value: String(d)
-  }, `併入 ${merge.prevMonth}/${d} 起（開學日）`))), h('label', {
-    className: 'flex items-center gap-1',
+  }, name))), h('div', {
+    className: 'flex-1'
+  }), h('button', {
+    onClick: startNextMonth,
+    className: `${btn} bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600`,
+    title: '切到下個月，並把本月結存量與尚未進貨數量帶過去'
+  }, '開始下個月 →'));
+  const settingsRow = h('div', {
+    className: 'flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 border-t border-gray-200'
+  }, sectionLabel('本月設定'), h('label', {
+    className: 'flex items-center gap-1.5',
     title: '上課日沒填人數時會自動帶入；新月份會沿用上個月的預設人數'
   }, '預設人數', h('input', {
     type: 'number',
@@ -1162,33 +1182,31 @@ function App() {
     onChange: e => setHeaderField('defaultStudents', e.target.value),
     onWheel: blockWheel,
     className: 'w-20 border border-gray-300 rounded px-2 py-1.5 bg-white text-center'
-  }), '人'), h('button', {
+  }), '人'), h('label', {
+    className: 'flex items-center gap-1.5',
+    title: '開學日在上個月底時，可以把那幾天併到這張表，例如 8/31 開學併入 9 月'
+  }, '開學併入', h('select', {
+    value: merge.merged ? String(merge.from) : '',
+    onChange: e => setHeaderField('mergeFrom', e.target.value),
+    className: `border rounded px-2 py-1.5 ${merge.merged ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-300 bg-white'}`
+  }, h('option', {
+    value: ''
+  }, '不併入'), Array.from({
+    length: 10
+  }, (_, i) => merge.prevDays - i).map(d => h('option', {
+    key: d,
+    value: String(d)
+  }, `${merge.prevMonth}/${d} 起`)))), h('button', {
     onClick: () => setVacation(vacation ? null : {
       start: '',
       end: '',
       name: month >= 6 && month <= 9 ? '暑假' : '寒假'
     }),
-    className: btnGray
-  }, '設定寒暑假'), savedMonths.length > 0 && h('select', {
-    value: store.sheets[currentKey] ? currentKey : '',
-    onChange: e => e.target.value && setCurrent(parseSheetKey(e.target.value)),
-    className: 'border border-gray-300 rounded px-2 py-1.5 bg-white'
-  }, h('option', {
-    value: ''
-  }, `已存的${riceName}月份…`), savedMonths.map(m => h('option', {
-    key: sheetKey(m.year, m.month, m.riceType),
-    value: sheetKey(m.year, m.month, m.riceType)
-  }, getPeriodText(store.sheets[sheetKey(m.year, m.month, m.riceType)], m.year, m.month)))), h('div', {
-    className: 'flex-1'
-  }), h('button', {
-    onClick: startNextMonth,
-    className: `${btn} bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600`,
-    title: '切到下個月，並把本月結存量與尚未進貨數量帶過去'
-  }, '開始下個月 →')), vacation && h('div', {
-    className: 'flex flex-wrap items-center gap-2 bg-amber-50 border border-amber-200 rounded p-2 text-sm'
-  }, h('span', {
-    className: 'font-bold text-amber-900'
-  }, '寒暑假設定'), h('input', {
+    className: `${btnGray} ${vacation ? 'ring-2 ring-amber-300' : ''}`
+  }, '設定寒暑假'));
+  const vacationPanel = vacation && h('div', {
+    className: 'flex flex-wrap items-center gap-2 px-3 py-2 border-t border-amber-200 bg-amber-50 text-sm'
+  }, sectionLabel('寒暑假'), h('input', {
     type: 'date',
     value: vacation.start,
     onChange: e => setVacation({
@@ -1228,27 +1246,46 @@ function App() {
     onClick: () => setVacation(null),
     className: 'text-gray-500 hover:text-gray-700 px-2'
   }, '關閉'), h('div', {
-    className: 'w-full text-xs text-amber-800'
-  }, '可以跨月份，例如 2027/01/20 到 2027/02/10；放假日的備註欄會印出這個名稱。')), h('div', {
-    className: 'text-xs text-gray-500 space-y-0.5'
-  }, h('div', null, '・點「星期」欄可以切換上課日／放假日（例如補課、寒暑假、颱風假），有改過的會標 *。'), h('div', null, '・資料只存在這台電腦的這個瀏覽器，換電腦或清除瀏覽紀錄前請先按「備份」。')), !holidayYearStatus && h('div', {
+    className: 'w-full text-xs text-amber-800 pl-[4.5rem]'
+  }, '可以跨月份，例如 2027/01/20 到 2027/02/10；放假日的備註欄會印出這個名稱。'));
+  const controlPanel = h('div', {
+    className: 'bg-gray-50 border border-gray-200 rounded text-sm'
+  }, monthRow, settingsRow, vacationPanel);
+  const notices = [!holidayYearStatus && h('div', {
+    key: 'holiday-missing',
     className: 'text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1'
   }, `沒有內建 ${year} 年的國定假日，目前只自動標示週末，國定假日請點星期欄手動設定。`), holidayYearStatus === 'estimated' && h('div', {
+    key: 'holiday-estimated',
     className: 'text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1'
   }, `${year} 年的國定假日是推估的，請以人事行政總處公告為準，不同的日子請點星期欄調整。`), canCarryFromPrev && h('div', {
+    key: 'carry',
     className: 'flex flex-wrap items-center gap-2 text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded px-2 py-1.5'
   }, `最近有資料的月份（${prevPeriodText}）結存 ${prevCalc.finalBalance} 公斤、尚未進貨 ${prevCalc.currentNotReceived} 公斤，跟本月表頭不同。`, h('button', {
     onClick: carryFromPrev,
     className: 'px-2 py-0.5 rounded bg-blue-600 text-white text-xs hover:bg-blue-700'
-  }, '帶入這些數字')), h('div', {
-    className: `text-sm rounded px-2 py-1.5 border ${calc.issues.length ? 'text-red-800 bg-red-50 border-red-200' : 'text-emerald-800 bg-emerald-50 border-emerald-200'}`
+  }, '帶入這些數字'))];
+  const checkRow = h('div', {
+    className: 'flex items-start gap-3'
+  }, h('div', {
+    className: `flex-1 text-sm rounded px-2 py-1.5 border ${calc.issues.length ? 'text-red-800 bg-red-50 border-red-200' : 'text-emerald-800 bg-emerald-50 border-emerald-200'}`
   }, calc.issues.length ? h('div', null, h('div', {
     className: 'font-bold mb-0.5'
   }, `檢核：有 ${calc.issues.length} 個地方要確認`), h('ul', {
     className: 'list-disc pl-5 text-xs space-y-0.5'
   }, calc.issues.map((text, i) => h('li', {
     key: i
-  }, text)))) : '檢核：目前沒有發現問題'));
+  }, text)))) : '✓ 檢核：目前沒有發現問題'), h('button', {
+    onClick: () => setShowHelp(!showHelp),
+    className: 'shrink-0 text-sm text-blue-600 hover:underline py-1.5'
+  }, showHelp ? '收起說明' : '❓ 使用說明'));
+  const helpBox = showHelp && h('ul', {
+    className: 'text-xs text-gray-600 bg-white border border-gray-200 rounded px-4 py-2 list-disc pl-6 space-y-0.5'
+  }, ['在表格輸入進貨量、用量，結存量會自動計算；按 Enter 或 ↑↓ 可以上下移動，會自動跳過放假日。', '點「星期」欄可以切換上課日／放假日（例如補課、颱風假），有改過的會標 *。', '「預設人數」會帶入每個上課日，某天人數不同時直接在那一格輸入。', '開學日在上個月底（例如 8/31）時，在 9 月用「開學併入」把那幾天併進來。', '月底按「開始下個月」，結存量和尚未進貨數量會自動帶到下個月。', '資料只存在這台電腦的這個瀏覽器，換電腦或清除瀏覽紀錄前，請按「更多 → 備份」。'].map(text => h('li', {
+    key: text
+  }, text)));
+  const toolbar = h('div', {
+    className: 'print:hidden mb-4 space-y-3'
+  }, header, embeddedNotice, controlPanel, ...notices, checkRow, helpBox);
   const title = h('div', {
     className: 'text-center mb-2 print:mb-1'
   }, h('div', {
