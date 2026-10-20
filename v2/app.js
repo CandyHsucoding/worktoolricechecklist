@@ -311,11 +311,198 @@ const downloadBlob = (blob, filename) => {
   document.body.removeChild(link);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
-const csvCell = value => {
-  const text = String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+
+// Claude 應用程式等內嵌瀏覽器不支援列印預覽，請改用 Chrome / Edge
+const IS_EMBEDDED_BROWSER = /Electron|Claude\//.test(navigator.userAgent);
+
+// ---------- Excel ----------
+
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const BACKUP_SHEET = '_備份資料';
+const BACKUP_MARK = 'riceChecklist-backup-v2';
+let excelLoader = null;
+const loadExcelJS = () => {
+  if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  if (!excelLoader) {
+    excelLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'vendor/exceljs.min.js';
+      script.onload = () => resolve(window.ExcelJS);
+      script.onerror = () => {
+        excelLoader = null;
+        reject(new Error('無法載入 Excel 元件'));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return excelLoader;
 };
-const csvLine = cells => cells.map(csvCell).join(',') + '\r\n';
+const thinLine = {
+  style: 'thin',
+  color: {
+    argb: 'FF333333'
+  }
+};
+const ALL_BORDERS = {
+  top: thinLine,
+  left: thinLine,
+  bottom: thinLine,
+  right: thinLine
+};
+const solidFill = argb => ({
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: {
+    argb
+  }
+});
+const xlNum = v => v === '' || v == null ? '' : Number(v);
+
+// 依紙本格式產生一個月份的工作表（A4 直向、縮成一頁）
+const addMonthWorksheet = (wb, name, sheet, year, month, riceType, settings) => {
+  const riceName = RICE_TYPES[riceType];
+  const calc = computeSheet(sheet, year, month);
+  const ws = wb.addWorksheet(name, {
+    pageSetup: {
+      paperSize: 9,
+      orientation: 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      horizontalCentered: true,
+      margins: {
+        left: 0.4,
+        right: 0.4,
+        top: 0.4,
+        bottom: 0.4,
+        header: 0.2,
+        footer: 0.2
+      }
+    }
+  });
+  ws.columns = [7, 6, 10, 12, 11, 12, 14, 18].map(width => ({
+    width
+  }));
+  const font = {
+    name: '標楷體',
+    size: 11
+  };
+  const center = {
+    horizontal: 'center',
+    vertical: 'middle',
+    wrapText: true
+  };
+  const left = {
+    horizontal: 'left',
+    vertical: 'middle'
+  };
+  const right = {
+    horizontal: 'right',
+    vertical: 'middle'
+  };
+  const mergedText = (range, text, opts = {}) => {
+    ws.mergeCells(range);
+    const c = ws.getCell(range.split(':')[0]);
+    c.value = text;
+    c.font = {
+      ...font,
+      ...(opts.font || {})
+    };
+    c.alignment = opts.alignment || center;
+    return c;
+  };
+  const headerValue = v => v === '' || v == null ? '0' : v;
+  mergedText('A1:H1', `${settings.schoolName || '＿＿＿＿＿＿'}${getPeriodText(sheet, year, month)}食米用量登記表`, {
+    font: {
+      size: 16,
+      bold: true
+    }
+  });
+  ws.getRow(1).height = 28;
+  mergedText('A2:H2', `附件三（白米、糙米分張填寫）　本張：${riceName}`, {
+    font: {
+      size: 9
+    }
+  });
+  mergedText('A3:C3', `前月${riceName}結存量 ${headerValue(sheet.prevBalance)} 公斤`, {
+    alignment: left
+  });
+  mergedText('D3:F3', `前月尚未進貨量 ${headerValue(sheet.prevNotReceived)} 公斤`);
+  mergedText('G3:H3', `本月${riceName}申購量 ${headerValue(sheet.thisMonthOrder)} 公斤。`, {
+    alignment: right
+  });
+  const headRow = ws.addRow(['日期', '星期', '進貨量\n(公斤)', '供應學生人數', `${riceName}用量\n(公斤)`, `${riceName}結存量\n(公斤)`, '填表人', '備註']);
+  headRow.height = 32;
+  headRow.eachCell(c => {
+    c.font = {
+      ...font,
+      bold: true
+    };
+    c.alignment = center;
+    c.border = ALL_BORDERS;
+    c.fill = solidFill('FFEFEFEF');
+  });
+  calc.rows.forEach(r => {
+    const filler = r.isOff ? '' : r.day.filler || (r.hasData ? settings.filler : '');
+    const row = ws.addRow([r.date, r.dayOfWeek, r.isOff ? '' : xlNum(r.day.received), r.isOff ? '' : xlNum(r.students), r.isOff ? '' : xlNum(r.day.used), r.balance, filler, r.day.note || (r.isOff ? r.offLabel : '')]);
+    row.height = 17;
+    for (let col = 1; col <= 8; col++) {
+      const c = row.getCell(col);
+      c.font = font;
+      c.alignment = col === 8 ? left : center;
+      c.border = ALL_BORDERS;
+      if (r.isOff) c.fill = solidFill('FFE5E5E5');
+    }
+    if (r.dow === 0 || r.holiday) row.getCell(2).font = {
+      ...font,
+      bold: true,
+      color: {
+        argb: 'FFC00000'
+      }
+    };else if (r.dow === 6) row.getCell(2).font = {
+      ...font,
+      bold: true,
+      color: {
+        argb: 'FF2E7D32'
+      }
+    };
+  });
+  const totalRow = ws.addRow(['合計', '', calc.totalReceived || '', '', calc.totalUsed || '', calc.finalBalance, '', '']);
+  totalRow.height = 20;
+  for (let col = 1; col <= 8; col++) {
+    const c = totalRow.getCell(col);
+    c.font = {
+      ...font,
+      bold: true
+    };
+    c.alignment = center;
+    c.border = ALL_BORDERS;
+    c.fill = solidFill('FFEFEFEF');
+  }
+  ws.mergeCells(`A${totalRow.number}:B${totalRow.number}`);
+  const footRow = totalRow.number + 2;
+  mergedText(`A${footRow}:D${footRow}`, `本月尚未進貨數量 ${calc.currentNotReceived} 公斤。`, {
+    font: {
+      bold: true
+    },
+    alignment: left
+  });
+  mergedText(`E${footRow}:H${footRow}`, `填表人：${settings.filler || '＿＿＿＿＿＿'}`, {
+    font: {
+      bold: true
+    },
+    alignment: right
+  });
+  mergedText(`A${footRow + 1}:H${footRow + 1}`, '註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。', {
+    font: {
+      size: 9
+    },
+    alignment: left
+  });
+  ws.pageSetup.printArea = `A1:H${footRow + 1}`;
+  return ws;
+};
+const worksheetNameFor = (sheet, year, month, riceType) => `${getPeriodText(sheet, year, month).replace(/ /g, '')}${RICE_TYPES[riceType]}`.slice(0, 31);
 
 // ---------- 圖示 ----------
 
@@ -681,45 +868,87 @@ function App() {
   // ----- 匯出 / 備份 -----
 
   const schoolTitle = store.settings.schoolName || '';
-  const handleExportCSV = () => {
-    let csv = '﻿';
-    csv += csvLine([`${schoolTitle || '___________'}學校 ${periodText}食米用量登記表（${riceName}）`]);
-    csv += csvLine([`前月${riceName}結存量`, sheet.prevBalance, '公斤', '前月尚未進貨量', sheet.prevNotReceived, '公斤']);
-    csv += csvLine([`本月${riceName}申購量`, sheet.thisMonthOrder, '公斤']);
-    csv += '\r\n';
-    csv += csvLine(['日期', '星期', '進貨量(公斤)', '供應學生人數', `${riceName}用量(公斤)`, `${riceName}結存量(公斤)`, '填表人', '備註']);
-    calc.rows.forEach(r => {
-      const filler = r.isOff ? '' : r.day.filler || (r.hasData ? store.settings.filler : '');
-      csv += csvLine([r.date, r.dayOfWeek, r.isOff ? '' : r.day.received, r.isOff ? '' : r.students, r.isOff ? '' : r.day.used, r.balance, filler, r.day.note || (r.isOff ? r.offLabel : '')]);
-    });
-    csv += csvLine(['合計', '', calc.totalReceived, '', calc.totalUsed, calc.finalBalance, '', '']);
-    csv += csvLine(['本月尚未進貨數量', calc.currentNotReceived, '公斤']);
-    csv += csvLine(['填表人：', store.settings.filler]);
-    csv += csvLine(['註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。']);
-    downloadBlob(new Blob([csv], {
-      type: 'text/csv;charset=utf-8'
-    }), `${schoolTitle || '食米用量'}登記表_${periodText.replace(/ /g, '')}_${riceName}.csv`);
+  const handleExportExcel = async () => {
+    try {
+      const ExcelJS = await loadExcelJS();
+      const wb = new ExcelJS.Workbook();
+      addMonthWorksheet(wb, worksheetNameFor(sheet, year, month, riceType), sheet, year, month, riceType, store.settings);
+      const buffer = await wb.xlsx.writeBuffer();
+      downloadBlob(new Blob([buffer], {
+        type: XLSX_TYPE
+      }), `${schoolTitle || '食米用量'}登記表_${periodText.replace(/ /g, '')}_${riceName}.xlsx`);
+    } catch (error) {
+      console.warn(error);
+      window.alert('匯出 Excel 失敗，請重新整理頁面後再試一次。');
+    }
   };
-  const handleBackup = () => {
-    const now = new Date();
-    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-    const data = {
-      app: 'riceChecklist',
-      version: 2,
-      exportedAt: now.toISOString(),
-      settings: store.settings,
-      sheets: store.sheets
-    };
-    downloadBlob(new Blob([JSON.stringify(data, null, 2)], {
-      type: 'application/json'
-    }), `食米登記備份_${schoolTitle || '學校'}_${stamp}.json`);
+  const handleBackup = async () => {
+    try {
+      const ExcelJS = await loadExcelJS();
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+      const wb = new ExcelJS.Workbook();
+      const info = wb.addWorksheet('說明');
+      info.columns = [{
+        width: 90
+      }];
+      ['食米用量登記表 備份檔', `備份時間：${now.toLocaleString('zh-TW')}`, '', '・每個有資料的月份各一個工作表，可以直接查看或列印。', '・要把資料搬到別台電腦：在那台電腦開啟登記表，按「還原」選這個檔案。', '・還原只會讀取備份當時的資料，在 Excel 裡修改工作表內容不會被還原。'].forEach((text, i) => {
+        const c = info.getCell(`A${i + 1}`);
+        c.value = text;
+        c.font = {
+          name: '標楷體',
+          size: i === 0 ? 14 : 11,
+          bold: i === 0
+        };
+      });
+      const keys = Object.keys(store.sheets).map(key => ({
+        key,
+        ...parseSheetKey(key)
+      })).filter(k => sheetHasData(store.sheets[k.key])).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month) || a.riceType.localeCompare(b.riceType));
+      keys.forEach(k => {
+        const sh = getSheetFor(store.sheets, k.year, k.month, k.riceType);
+        addMonthWorksheet(wb, worksheetNameFor(sh, k.year, k.month, k.riceType), sh, k.year, k.month, k.riceType, store.settings);
+      });
+      // 還原用的完整資料放在隱藏工作表
+      const dataSheet = wb.addWorksheet(BACKUP_SHEET, {
+        state: 'hidden'
+      });
+      const json = JSON.stringify({
+        app: 'riceChecklist',
+        version: 2,
+        exportedAt: now.toISOString(),
+        settings: store.settings,
+        sheets: store.sheets
+      });
+      dataSheet.getCell('A1').value = BACKUP_MARK;
+      for (let i = 0, row = 2; i < json.length; i += 30000, row++) dataSheet.getCell(`A${row}`).value = json.slice(i, i + 30000);
+      const buffer = await wb.xlsx.writeBuffer();
+      downloadBlob(new Blob([buffer], {
+        type: XLSX_TYPE
+      }), `食米登記備份_${schoolTitle || '學校'}_${stamp}.xlsx`);
+    } catch (error) {
+      console.warn(error);
+      window.alert('備份失敗，請重新整理頁面後再試一次。');
+    }
+  };
+  const readBackupFile = async file => {
+    // 相容先前的 .json 備份
+    if (/\.json$/i.test(file.name)) return JSON.parse(await file.text());
+    const ExcelJS = await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await file.arrayBuffer());
+    const ws = wb.getWorksheet(BACKUP_SHEET);
+    if (!ws || ws.getCell('A1').value !== BACKUP_MARK) throw new Error('not-backup');
+    let json = '';
+    for (let row = 2; row <= ws.rowCount; row++) json += ws.getCell(`A${row}`).value || '';
+    return JSON.parse(json);
   };
   const handleRestore = async e => {
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
     try {
-      const data = JSON.parse(await file.text());
+      const data = await readBackupFile(file);
       if (!data || typeof data.sheets !== 'object') throw new Error('格式不符');
       const count = Object.keys(data.sheets).length;
       const ok = window.confirm(`備份檔有 ${count} 個月份的資料。\n\n會合併到目前的資料中，相同月份以備份檔為準。要繼續嗎？`);
@@ -737,7 +966,20 @@ function App() {
       }));
       setSaveStatus(`已還原 ${count} 個月份`);
     } catch (error) {
-      window.alert('無法讀取這個檔案，請確認是本系統匯出的備份檔（.json）。');
+      console.warn(error);
+      window.alert(error.message === 'not-backup' ? '這個 Excel 不是備份檔（可能是「匯出 Excel」產生的單月報表），請選「備份」產生的檔案。' : '無法讀取這個檔案，請確認是本系統「備份」產生的 Excel 檔。');
+    }
+  };
+  const handlePrint = () => {
+    if (IS_EMBEDDED_BROWSER && !window.confirm('目前是在 Claude 應用程式內建的瀏覽器開啟，這裡不支援列印，通常會印不出來。\n\n請改用 Chrome 或 Edge 開啟這個網址再列印（資料要先用「備份」→「還原」搬過去）。\n\n仍要試試看嗎？')) return;
+    window.print();
+  };
+  const copyPageUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(location.href);
+      setSaveStatus('已複製網址，請貼到 Chrome 或 Edge 開啟');
+    } catch (error) {
+      window.prompt('請複製這個網址，貼到 Chrome 或 Edge 開啟：', location.href);
     }
   };
 
@@ -832,29 +1074,35 @@ function App() {
   }, saveStatus)), h('div', {
     className: 'flex flex-wrap md:justify-end gap-2'
   }, h('button', {
-    onClick: () => window.print(),
+    onClick: handlePrint,
     className: `${btn} bg-blue-600 hover:bg-blue-700 text-white border-blue-600`
   }, h(PrinterIcon), '列印'), h('button', {
-    onClick: handleExportCSV,
-    className: btnGray
-  }, h(DownloadIcon), '匯出 CSV'), h('button', {
+    onClick: handleExportExcel,
+    className: btnGray,
+    title: '把本月的表存成 Excel 檔，格式跟紙本一樣'
+  }, h(DownloadIcon), '匯出 Excel'), h('button', {
     onClick: handleBackup,
     className: btnGray,
-    title: '把所有月份存成一個檔案，可在別台電腦還原'
+    title: '把所有月份存成一個 Excel 檔，可在別台電腦用「還原」讀回來'
   }, h(DownloadIcon), '備份'), h('button', {
     onClick: () => fileInputRef.current && fileInputRef.current.click(),
     className: btnGray
   }, h(UploadIcon), '還原'), h('input', {
     ref: fileInputRef,
     type: 'file',
-    accept: '.json,application/json',
+    accept: '.xlsx,.json',
     className: 'hidden',
     onChange: handleRestore
   }), h('button', {
     onClick: clearMonth,
     disabled: !store.sheets[currentKey],
     className: `${btnGray} disabled:opacity-40 disabled:cursor-not-allowed`
-  }, h(TrashIcon), '清除本月'))), h('div', {
+  }, h(TrashIcon), '清除本月'))), IS_EMBEDDED_BROWSER && h('div', {
+    className: 'flex flex-wrap items-center gap-2 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded px-2 py-1.5'
+  }, '目前在 Claude 應用程式內建的瀏覽器開啟，這裡不能列印。請用 Chrome 或 Edge 開啟本網址；資料只存在各自的瀏覽器，請先按「備份」，再到 Chrome / Edge 按「還原」。', h('button', {
+    onClick: copyPageUrl,
+    className: 'px-2 py-0.5 rounded bg-amber-600 text-white text-xs hover:bg-amber-700'
+  }, '複製網址')), h('div', {
     className: 'flex flex-wrap items-center gap-2 bg-gray-50 border border-gray-200 rounded p-2 text-sm'
   }, h('button', {
     onClick: () => goMonth(-1),
