@@ -643,23 +643,6 @@ function App() {
     return result;
   }, [sheet, year, month, store.sheets, riceType]);
 
-  // 前月結存從「最近一個有資料的月份」帶入（例如暑假 7、8 月沒有表，就從 6 月帶）
-  let prevYear = null;
-  let prevMonth = null;
-  let prevSheet = null;
-  for (let back = 1; back <= 24; back++) {
-    const [y, m] = shiftMonth(year, month, -back);
-    const candidate = store.sheets[sheetKey(y, m, riceType)];
-    if (sheetHasData(candidate)) {
-      prevYear = y;
-      prevMonth = m;
-      prevSheet = candidate;
-      break;
-    }
-  }
-  const prevCalc = useMemo(() => prevSheet ? computeSheet(prevSheet, prevYear, prevMonth) : null, [prevSheet, prevYear, prevMonth]);
-  const prevPeriodText = prevSheet ? getPeriodText(prevSheet, prevYear, prevMonth) : '';
-  const canCarryFromPrev = !!prevCalc && (String(sheet.prevBalance) !== String(prevCalc.finalBalance) || String(sheet.prevNotReceived) !== String(prevCalc.currentNotReceived));
   const holidayYearStatus = HOLIDAY_YEARS[year + 1911];
   const yearOptions = [];
   for (let y = todayROC().year - 3; y <= todayROC().year + 2; y++) yearOptions.push(y);
@@ -716,14 +699,6 @@ function App() {
       year: y,
       month: m
     });
-  };
-  const carryFromPrev = () => {
-    if (!prevCalc) return;
-    updateSheet(sh => ({
-      ...sh,
-      prevBalance: String(prevCalc.finalBalance),
-      prevNotReceived: String(prevCalc.currentNotReceived)
-    }));
   };
   const startNextMonth = () => {
     const [ny, nm] = shiftMonth(year, month, 1);
@@ -1288,13 +1263,7 @@ function App() {
   }, `沒有內建 ${year} 年的國定假日，目前只自動標示週末，國定假日請點星期欄手動設定。`), holidayYearStatus === 'estimated' && h('div', {
     key: 'holiday-estimated',
     className: 'text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1'
-  }, `${year} 年的國定假日是推估的，請以人事行政總處公告為準，不同的日子請點星期欄調整。`), canCarryFromPrev && h('div', {
-    key: 'carry',
-    className: 'flex flex-wrap items-center gap-2 text-sm text-blue-900 bg-blue-50 border border-blue-200 rounded px-2 py-1.5'
-  }, `最近有資料的月份（${prevPeriodText}）結存 ${prevCalc.finalBalance} 公斤、尚未進貨 ${prevCalc.currentNotReceived} 公斤，跟本月表頭不同。`, h('button', {
-    onClick: carryFromPrev,
-    className: 'px-2 py-0.5 rounded bg-blue-600 text-white text-xs hover:bg-blue-700'
-  }, '帶入這些數字'))];
+  }, `${year} 年的國定假日是推估的，請以人事行政總處公告為準，不同的日子請點星期欄調整。`)];
   const checkRow = h('div', {
     className: 'flex items-start gap-3'
   }, h('div', {
