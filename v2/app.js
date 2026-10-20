@@ -453,6 +453,13 @@ const addMonthWorksheet = (wb, name, sheet, year, month, riceType, settings) => 
       c.border = ALL_BORDERS;
       if (r.isOff) c.fill = solidFill('FFE5E5E5');
     }
+    // 填表人欄要留給核章，名字用淡灰色
+    row.getCell(7).font = {
+      ...font,
+      color: {
+        argb: 'FFC8C8C8'
+      }
+    };
     if (r.dow === 0 || r.holiday) row.getCell(2).font = {
       ...font,
       bold: true,
@@ -487,7 +494,23 @@ const addMonthWorksheet = (wb, name, sheet, year, month, riceType, settings) => 
     },
     alignment: left
   });
-  mergedText(`E${footRow}:H${footRow}`, `填表人：${settings.filler || '＿＿＿＿＿＿'}`, {
+  mergedText(`E${footRow}:H${footRow}`, {
+    richText: [{
+      text: '填表人：',
+      font: {
+        ...font,
+        bold: true
+      }
+    }, {
+      text: settings.filler || '＿＿＿＿＿＿',
+      font: {
+        ...font,
+        color: {
+          argb: 'FFC8C8C8'
+        }
+      }
+    }]
+  }, {
     font: {
       bold: true
     },
@@ -1030,7 +1053,7 @@ function App() {
       className: 'hidden print:block text-center text-[11px]'
     }, r.students));
   };
-  const textCell = (r, field, printValue, placeholder, align = 'text-center') => h('td', {
+  const textCell = (r, field, printValue, placeholder, align = 'text-center', printClass = '') => h('td', {
     className: cell
   }, h('input', {
     id: `${field}-${r.key}`,
@@ -1041,7 +1064,7 @@ function App() {
     onKeyDown: e => handleKeyDown(e, r.index, field),
     className: `${inputBase} ${align} placeholder-gray-400 print:hidden`
   }), h('span', {
-    className: `hidden print:block ${align} text-[11px] px-1`
+    className: `hidden print:block ${align} text-[11px] px-1 ${printClass}`
   }, printValue));
   const headerNumber = (field, label, labelClass) => h('div', {
     className: 'flex items-center gap-1'
@@ -1348,7 +1371,7 @@ function App() {
       className: `${cell} font-bold ${r.balance < 0 ? 'text-red-600 bg-red-50' : 'text-blue-800 bg-gray-50/50'} print:bg-transparent`
     }, r.balance), r.isOff ? h('td', {
       className: cell
-    }) : textCell(r, 'filler', fillerPrint, store.settings.filler || ''), textCell(r, 'note', notePrint, notePlaceholder, 'text-left'));
+    }) : textCell(r, 'filler', fillerPrint, store.settings.filler || '', 'text-center', 'text-gray-300'), textCell(r, 'note', notePrint, notePlaceholder, 'text-left'));
   }), h('tr', {
     className: 'bg-gray-100 font-bold border-t-2 border-gray-800 print:bg-gray-50'
   }, h('td', {
@@ -1387,7 +1410,7 @@ function App() {
     onChange: e => setSettings('filler', e.target.value),
     placeholder: '營養師或午秘姓名',
     title: '每天的填表人沒填時，列印會自動帶入這個名字（只帶入有資料的日子）',
-    className: 'border-b border-gray-800 px-2 w-40 text-center font-medium tracking-widest focus:outline-none placeholder-gray-300 print:border-gray-800'
+    className: 'border-b border-gray-800 px-2 w-40 text-center font-medium tracking-widest focus:outline-none placeholder-gray-300 print:border-gray-800 print:text-gray-300'
   }))), h('div', {
     className: 'text-xs font-semibold text-gray-600 print:text-[10px]'
   }, '註：中央廚房學校填寫本表應包括委辦學校食米提領及使用部分。'));
