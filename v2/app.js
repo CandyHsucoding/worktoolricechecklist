@@ -21,18 +21,39 @@ const EMPTY_DAY = {
   used: '',
   filler: '',
   note: '',
+  offName: '',
+  // 寒暑假等自訂放假名稱
   dayType: 'auto' // auto：依星期與國定假日判斷；school：強制上課；off：強制放假
 };
 const createEmptySheet = () => ({
   prevBalance: '',
   prevNotReceived: '',
   thisMonthOrder: '',
+  defaultStudents: '',
+  // 預設供應人數：上課日沒填人數時帶入
   mergeFrom: '',
   // 併入上個月的起始日（例如開學日 8/31 併入 9 月表）；空白表示不併入
   days: {}
 });
 const sheetHasData = sheet => !!sheet && (sheet.prevBalance !== '' || sheet.prevNotReceived !== '' || sheet.thisMonthOrder !== '' || Object.values(sheet.days || {}).some(d => d.received !== '' || d.students !== '' || d.used !== ''));
-const EMPTY_SHEET = createEmptySheet();
+// 新月份沿用最近一個月份的預設供應人數
+const findInheritedDefaultStudents = (sheets, year, month, riceType) => {
+  for (let back = 1; back <= 24; back++) {
+    const [y, m] = shiftMonth(year, month, -back);
+    const sh = sheets[sheetKey(y, m, riceType)];
+    if (sh && sh.defaultStudents) return sh.defaultStudents;
+  }
+  return '';
+};
+// 取得某月的表；沒有表、或舊資料沒有設定過預設人數時，沿用上個月的
+const getSheetFor = (sheets, year, month, riceType) => {
+  const sheet = sheets[sheetKey(year, month, riceType)] || createEmptySheet();
+  if (sheet.defaultStudents !== undefined && sheets[sheetKey(year, month, riceType)]) return sheet;
+  return {
+    ...sheet,
+    defaultStudents: findInheritedDefaultStudents(sheets, year, month, riceType)
+  };
+};
 const pad = n => String(n).padStart(2, '0');
 const num = v => v === '' || v == null ? 0 : Number(v) || 0;
 const sheetKey = (year, month, riceType) => `${year}-${month}-${riceType}`;
@@ -227,7 +248,7 @@ const computeSheet = (sheet, year, month) => {
       autoOff
     } = getAutoDayInfo(entry.y + 1911, entry.m, entry.d);
     const isOff = day.dayType === 'off' || day.dayType !== 'school' && autoOff;
-    const offLabel = holiday || (dow === 0 || dow === 6 ? '假日' : '放假');
+    const offLabel = day.offName || holiday || (dow === 0 || dow === 6 ? '假日' : '放假');
     const hasData = day.received !== '' || day.students !== '' || day.used !== '';
     const received = isOff ? 0 : num(day.received);
     const used = isOff ? 0 : num(day.used);
@@ -235,9 +256,11 @@ const computeSheet = (sheet, year, month) => {
     totalReceived += received;
     totalUsed += used;
     const isReceivedValid = received === 0 || received % 30 === 0;
+    const students = day.students !== '' ? day.students : isOff ? '' : sheet.defaultStudents || '';
+    const studentsIsDefault = day.students === '' && students !== '';
     if (!isOff) {
       if (!isReceivedValid) issues.push(`${where}進貨量 ${received} 不是 30 的倍數`);
-      if (day.used !== '' && day.students === '') issues.push(`${where}有用量但沒填供應人數`);
+      if (day.used !== '' && students === '') issues.push(`${where}有用量但沒填供應人數`);
       if (day.students !== '' && day.used === '') issues.push(`${where}有供應人數但沒填用量`);
       if (num(day.received) < 0 || num(day.used) < 0 || num(day.students) < 0) issues.push(`${where}有負數`);
     } else if (hasData) {
@@ -249,6 +272,8 @@ const computeSheet = (sheet, year, month) => {
       index: rows.length,
       date,
       day,
+      students,
+      studentsIsDefault,
       dow,
       dayOfWeek: DAY_NAMES[dow],
       holiday,
@@ -359,6 +384,7 @@ function App() {
   const [saveStatus, setSaveStatus] = useState(initial.message);
   const skipSave = useRef(!initial.needsSave);
   const fileInputRef = useRef(null);
+  const [vacation, setVacation] = useState(null); // 寒暑假設定面板：{ start, end, name }
   useEffect(() => {
     if (skipSave.current) {
       skipSave.current = false;
@@ -386,7 +412,7 @@ function App() {
   } = store.current;
   const riceName = RICE_TYPES[riceType];
   const currentKey = sheetKey(year, month, riceType);
-  const sheet = store.sheets[currentKey] || EMPTY_SHEET;
+  const sheet = useMemo(() => getSheetFor(store.sheets, year, month, riceType), [store.sheets, currentKey]);
   const merge = getMergeInfo(sheet, year, month);
   const periodText = getPeriodText(sheet, year, month);
   const calc = useMemo(() => {
@@ -450,7 +476,7 @@ function App() {
       ...s,
       sheets: {
         ...s.sheets,
-        [key]: updater(s.sheets[key] || createEmptySheet())
+        [key]: updater(getSheetFor(s.sheets, s.current.year, s.current.month, s.current.riceType))
       }
     };
   });
@@ -458,17 +484,20 @@ function App() {
     ...sh,
     [field]: value
   }));
-  const updateDay = (key, field, value) => updateSheet(sh => ({
+  const updateDayPatch = (key, patch) => updateSheet(sh => ({
     ...sh,
     days: {
       ...sh.days,
       [key]: {
         ...EMPTY_DAY,
         ...(sh.days[key] || {}),
-        [field]: value
+        ...patch
       }
     }
   }));
+  const updateDay = (key, field, value) => updateDayPatch(key, {
+    [field]: value
+  });
   const goMonth = delta => {
     const [y, m] = shiftMonth(year, month, delta);
     setCurrent({
@@ -512,7 +541,7 @@ function App() {
       sheets: {
         ...s.sheets,
         [nextKey]: {
-          ...(s.sheets[nextKey] || createEmptySheet()),
+          ...getSheetFor(s.sheets, ny, nm, riceType),
           ...carry
         }
       }
@@ -521,7 +550,10 @@ function App() {
   const toggleDayType = row => {
     let next;
     if (row.isOff) next = row.autoOff ? 'school' : 'auto';else next = row.autoOff ? 'auto' : 'off';
-    updateDay(row.key, 'dayType', next);
+    updateDayPatch(row.key, {
+      dayType: next,
+      offName: ''
+    });
   };
   const clearMonth = () => {
     if (!store.sheets[currentKey]) return;
@@ -537,6 +569,93 @@ function App() {
         sheets
       };
     });
+  };
+
+  // ----- 寒暑假：一次設定一段日期（可跨月）-----
+
+  const applyVacation = mode => {
+    const {
+      start,
+      end,
+      name
+    } = vacation;
+    if (!start || !end) return window.alert('請選開始日和結束日。');
+    const startDate = new Date(`${start}T00:00:00`);
+    const endDate = new Date(`${end}T00:00:00`);
+    if (endDate < startDate) return window.alert('結束日不能早於開始日。');
+    const totalDays = Math.round((endDate - startDate) / 86400000) + 1;
+    if (totalDays > 120) return window.alert('一次最多設定 120 天。');
+    // 找出每一天要改的位置：該月的表（目前米種，以及已經有表的其他米種），還有把這天併入的下個月表
+    const targets = [];
+    for (let i = 0; i < totalDays; i++) {
+      const dt = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+      const y = dt.getFullYear() - 1911;
+      const m = dt.getMonth() + 1;
+      const d = dt.getDate();
+      const [ny, nm] = shiftMonth(y, m, 1);
+      Object.keys(RICE_TYPES).forEach(rt => {
+        const key = sheetKey(y, m, rt);
+        if (rt === riceType || store.sheets[key]) targets.push({
+          y,
+          m,
+          rt,
+          key,
+          dayKey: String(d)
+        });
+        const nextSheet = store.sheets[sheetKey(ny, nm, rt)];
+        const from = nextSheet ? num(nextSheet.mergeFrom) : 0;
+        if (from >= 1 && d >= from) targets.push({
+          y: ny,
+          m: nm,
+          rt,
+          key: sheetKey(ny, nm, rt),
+          dayKey: `p${d}`
+        });
+      });
+    }
+    const label = (name || '').trim() || '放假';
+    if (mode === 'off') {
+      const withData = targets.filter(t => {
+        const day = store.sheets[t.key]?.days[t.dayKey];
+        return day && (day.received !== '' || day.students !== '' || day.used !== '');
+      }).length;
+      const msg = `要把 ${start} 到 ${end}（共 ${totalDays} 天）設成「${label}」嗎？` + (withData ? `
+
+注意：其中有 ${withData} 天已經填了數字，設成放假後不會計入。` : '');
+      if (!window.confirm(msg)) return;
+    } else if (!window.confirm(`要把 ${start} 到 ${end}（共 ${totalDays} 天）改回自動判斷嗎？
+（週末與國定假日照常放假，其他日子是上課日）`)) return;
+    const patch = mode === 'off' ? {
+      dayType: 'off',
+      offName: label
+    } : {
+      dayType: 'auto',
+      offName: ''
+    };
+    setStore(s => {
+      const sheets = {
+        ...s.sheets
+      };
+      targets.forEach(t => {
+        const sh = getSheetFor(sheets, t.y, t.m, t.rt);
+        sheets[t.key] = {
+          ...sh,
+          days: {
+            ...sh.days,
+            [t.dayKey]: {
+              ...EMPTY_DAY,
+              ...(sh.days[t.dayKey] || {}),
+              ...patch
+            }
+          }
+        };
+      });
+      return {
+        ...s,
+        sheets
+      };
+    });
+    setVacation(null);
   };
 
   // ----- 鍵盤：Enter / ↓ 往下，↑ 往上，自動跳過放假日 -----
@@ -571,7 +690,7 @@ function App() {
     csv += csvLine(['日期', '星期', '進貨量(公斤)', '供應學生人數', `${riceName}用量(公斤)`, `${riceName}結存量(公斤)`, '填表人', '備註']);
     calc.rows.forEach(r => {
       const filler = r.isOff ? '' : r.day.filler || (r.hasData ? store.settings.filler : '');
-      csv += csvLine([r.date, r.dayOfWeek, r.isOff ? '' : r.day.received, r.isOff ? '' : r.day.students, r.isOff ? '' : r.day.used, r.balance, filler, r.day.note || (r.isOff ? r.offLabel : '')]);
+      csv += csvLine([r.date, r.dayOfWeek, r.isOff ? '' : r.day.received, r.isOff ? '' : r.students, r.isOff ? '' : r.day.used, r.balance, filler, r.day.note || (r.isOff ? r.offLabel : '')]);
     });
     csv += csvLine(['合計', '', calc.totalReceived, '', calc.totalUsed, calc.finalBalance, '', '']);
     csv += csvLine(['本月尚未進貨數量', calc.currentNotReceived, '公斤']);
@@ -647,6 +766,26 @@ function App() {
       onWheel: blockWheel,
       className: `${inputBase} ${extraInput}`
     }));
+  };
+  const studentsCell = r => {
+    if (r.isOff) return numberCell(r, 'students');
+    return h('td', {
+      className: cell
+    }, h('input', {
+      id: `students-${r.key}`,
+      type: 'number',
+      min: '0',
+      inputMode: 'numeric',
+      value: r.day.students,
+      placeholder: r.studentsIsDefault ? r.students : '',
+      title: r.studentsIsDefault ? '目前帶入預設人數，直接輸入可以改這一天' : '',
+      onChange: e => updateDay(r.key, 'students', e.target.value),
+      onKeyDown: e => handleKeyDown(e, r.index, 'students'),
+      onWheel: blockWheel,
+      className: `${inputBase} placeholder-gray-500 print:hidden`
+    }), h('span', {
+      className: 'hidden print:block text-center text-[11px]'
+    }, r.students));
   };
   const textCell = (r, field, printValue, placeholder, align = 'text-center') => h('td', {
     className: cell
@@ -765,7 +904,24 @@ function App() {
   }, (_, i) => merge.prevDays - i).map(d => h('option', {
     key: d,
     value: String(d)
-  }, `併入 ${merge.prevMonth}/${d} 起（開學日）`))), savedMonths.length > 0 && h('select', {
+  }, `併入 ${merge.prevMonth}/${d} 起（開學日）`))), h('label', {
+    className: 'flex items-center gap-1',
+    title: '上課日沒填人數時會自動帶入；新月份會沿用上個月的預設人數'
+  }, '預設人數', h('input', {
+    type: 'number',
+    min: '0',
+    value: sheet.defaultStudents || '',
+    onChange: e => setHeaderField('defaultStudents', e.target.value),
+    onWheel: blockWheel,
+    className: 'w-20 border border-gray-300 rounded px-2 py-1.5 bg-white text-center'
+  }), '人'), h('button', {
+    onClick: () => setVacation(vacation ? null : {
+      start: '',
+      end: '',
+      name: month >= 6 && month <= 9 ? '暑假' : '寒假'
+    }),
+    className: btnGray
+  }, '設定寒暑假'), savedMonths.length > 0 && h('select', {
     value: store.sheets[currentKey] ? currentKey : '',
     onChange: e => e.target.value && setCurrent(parseSheetKey(e.target.value)),
     className: 'border border-gray-300 rounded px-2 py-1.5 bg-white'
@@ -780,7 +936,52 @@ function App() {
     onClick: startNextMonth,
     className: `${btn} bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600`,
     title: '切到下個月，並把本月結存量與尚未進貨數量帶過去'
-  }, '開始下個月 →')), h('div', {
+  }, '開始下個月 →')), vacation && h('div', {
+    className: 'flex flex-wrap items-center gap-2 bg-amber-50 border border-amber-200 rounded p-2 text-sm'
+  }, h('span', {
+    className: 'font-bold text-amber-900'
+  }, '寒暑假設定'), h('input', {
+    type: 'date',
+    value: vacation.start,
+    onChange: e => setVacation({
+      ...vacation,
+      start: e.target.value
+    }),
+    className: 'border border-gray-300 rounded px-2 py-1 bg-white'
+  }), '到', h('input', {
+    type: 'date',
+    value: vacation.end,
+    onChange: e => setVacation({
+      ...vacation,
+      end: e.target.value
+    }),
+    className: 'border border-gray-300 rounded px-2 py-1 bg-white'
+  }), '名稱', h('input', {
+    type: 'text',
+    list: 'vacation-names',
+    value: vacation.name,
+    onChange: e => setVacation({
+      ...vacation,
+      name: e.target.value
+    }),
+    className: 'w-24 border border-gray-300 rounded px-2 py-1 bg-white'
+  }), h('datalist', {
+    id: 'vacation-names'
+  }, ['寒假', '暑假', '停課', '颱風假'].map(n => h('option', {
+    key: n,
+    value: n
+  }))), h('button', {
+    onClick: () => applyVacation('off'),
+    className: `${btn} bg-amber-600 hover:bg-amber-700 text-white border-amber-600`
+  }, '設為放假'), h('button', {
+    onClick: () => applyVacation('auto'),
+    className: btnGray
+  }, '改回自動判斷'), h('button', {
+    onClick: () => setVacation(null),
+    className: 'text-gray-500 hover:text-gray-700 px-2'
+  }, '關閉'), h('div', {
+    className: 'w-full text-xs text-amber-800'
+  }, '可以跨月份，例如 2027/01/20 到 2027/02/10；放假日的備註欄會印出這個名稱。')), h('div', {
     className: 'text-xs text-gray-500 space-y-0.5'
   }, h('div', null, '・點「星期」欄可以切換上課日／放假日（例如補課、寒暑假、颱風假），有改過的會標 *。'), h('div', null, '・資料只存在這台電腦的這個瀏覽器，換電腦或清除瀏覽紀錄前請先按「備份」。')), !holidayYearStatus && h('div', {
     className: 'text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1'
@@ -858,7 +1059,7 @@ function App() {
       onClick: () => toggleDayType(r)
     }, r.dayOfWeek, r.day.dayType !== 'auto' && h('span', {
       className: 'text-amber-600 print:hidden'
-    }, '*')), numberCell(r, 'received', !r.isReceivedValid ? 'bg-red-50' : '', !r.isReceivedValid ? 'text-red-600 font-bold' : ''), numberCell(r, 'students'), numberCell(r, 'used'), h('td', {
+    }, '*')), numberCell(r, 'received', !r.isReceivedValid ? 'bg-red-50' : '', !r.isReceivedValid ? 'text-red-600 font-bold' : ''), studentsCell(r), numberCell(r, 'used'), h('td', {
       className: `${cell} font-bold ${r.balance < 0 ? 'text-red-600 bg-red-50' : 'text-blue-800 bg-gray-50/50'} print:bg-transparent`
     }, r.balance), r.isOff ? h('td', {
       className: cell
