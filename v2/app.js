@@ -594,9 +594,10 @@ function App() {
   const [saveStatus, setSaveStatus] = useState(initial.message);
   const skipSave = useRef(!initial.needsSave);
   const fileInputRef = useRef(null);
-  const [vacation, setVacation] = useState(null);
+  const [vacation, setVacation] = useState(null); // 寒暑假設定面板：{ start, end, name }
   const [moreOpen, setMoreOpen] = useState(false);
-  const [showHelp, setShowHelp] = useState(false); // 寒暑假設定面板：{ start, end, name }
+  const [showHelp, setShowHelp] = useState(false);
+  const [backupPick, setBackupPick] = useState(null); // 備份月份選擇視窗：選取的 sheet key 陣列
   useEffect(() => {
     if (skipSave.current) {
       skipSave.current = false;
@@ -906,7 +907,14 @@ function App() {
       window.alert('匯出 Excel 失敗，請重新整理頁面後再試一次。');
     }
   };
-  const handleBackup = async () => {
+  // 有資料的月份，新的在前（備份視窗的選項）
+  const backupCandidates = Object.keys(store.sheets).filter(key => sheetHasData(store.sheets[key])).map(key => ({
+    key,
+    ...parseSheetKey(key)
+  })).sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month) || a.riceType.localeCompare(b.riceType));
+  const openBackupPicker = () => setBackupPick(backupCandidates.some(k => k.key === currentKey) ? [currentKey] : []);
+  const handleBackup = async selectedKeys => {
+    if (!selectedKeys.length) return window.alert('請至少選一個月份。');
     try {
       const ExcelJS = await loadExcelJS();
       const now = new Date();
@@ -916,7 +924,7 @@ function App() {
       info.columns = [{
         width: 90
       }];
-      ['食米用量登記表 備份檔', `備份時間：${now.toLocaleString('zh-TW')}`, '', '・每個有資料的月份各一個工作表，可以直接查看或列印。', '・要把資料搬到別台電腦：在那台電腦開啟登記表，按「還原」選這個檔案。', '・還原只會讀取備份當時的資料，在 Excel 裡修改工作表內容不會被還原。'].forEach((text, i) => {
+      ['食米用量登記表 備份檔', `備份時間：${now.toLocaleString('zh-TW')}`, '', '・每個備份的月份各一個工作表，可以直接查看或列印。', '・要把資料搬到別台電腦：在那台電腦開啟登記表，按「還原」選這個檔案。', '・還原只會讀取備份當時的資料，在 Excel 裡修改工作表內容不會被還原。'].forEach((text, i) => {
         const c = info.getCell(`A${i + 1}`);
         c.value = text;
         c.font = {
@@ -925,11 +933,10 @@ function App() {
           bold: i === 0
         };
       });
-      const keys = Object.keys(store.sheets).map(key => ({
-        key,
-        ...parseSheetKey(key)
-      })).filter(k => sheetHasData(store.sheets[k.key])).sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month) || a.riceType.localeCompare(b.riceType));
+      const keys = backupCandidates.filter(k => selectedKeys.includes(k.key)).reverse();
+      const pickedSheets = {};
       keys.forEach(k => {
+        pickedSheets[k.key] = store.sheets[k.key];
         const sh = getSheetFor(store.sheets, k.year, k.month, k.riceType);
         addMonthWorksheet(wb, worksheetNameFor(sh, k.year, k.month, k.riceType), sh, k.year, k.month, k.riceType, store.settings);
       });
@@ -942,14 +949,15 @@ function App() {
         version: 2,
         exportedAt: now.toISOString(),
         settings: store.settings,
-        sheets: store.sheets
+        sheets: pickedSheets
       });
       dataSheet.getCell('A1').value = BACKUP_MARK;
       for (let i = 0, row = 2; i < json.length; i += 30000, row++) dataSheet.getCell(`A${row}`).value = json.slice(i, i + 30000);
       const buffer = await wb.xlsx.writeBuffer();
       downloadBlob(new Blob([buffer], {
         type: XLSX_TYPE
-      }), `食米登記備份_${schoolTitle || '學校'}_${stamp}.xlsx`);
+      }), `食米登記備份_${schoolTitle || '學校'}_${keys.length === 1 ? worksheetNameFor(store.sheets[keys[0].key], keys[0].year, keys[0].month, keys[0].riceType) : `${keys.length}個月份`}_${stamp}.xlsx`);
+      setBackupPick(null);
     } catch (error) {
       console.warn(error);
       window.alert('備份失敗，請重新整理頁面後再試一次。');
@@ -1127,8 +1135,8 @@ function App() {
     onClick: () => setMoreOpen(false)
   }), moreOpen && h('div', {
     className: 'absolute right-0 mt-1 w-56 z-20 bg-white border border-gray-200 rounded shadow-lg py-1'
-  }, moreMenuItem(DownloadIcon, '備份（全部月份）', handleBackup, {
-    title: '把所有月份存成一個 Excel 檔，可在別台電腦用「還原」讀回來'
+  }, moreMenuItem(DownloadIcon, '備份…', openBackupPicker, {
+    title: '選要備份的月份，存成一個 Excel 檔，可在別台電腦用「還原」讀回來'
   }), moreMenuItem(UploadIcon, '還原', () => fileInputRef.current && fileInputRef.current.click()), h('div', {
     className: 'my-1 border-t border-gray-100'
   }), moreMenuItem(TrashIcon, '清除本月', clearMonth, {
@@ -1306,9 +1314,56 @@ function App() {
   }, ['在表格輸入進貨量、用量，結存量會自動計算；按 Enter 或 ↑↓ 可以上下移動，會自動跳過放假日。', '點「星期」欄可以切換上課日／放假日（例如補課、颱風假），有改過的會標 *。', '「預設人數」會帶入每個上課日，某天人數不同時直接在那一格輸入。', '開學日在上個月底（例如 8/31）時，在 9 月用「開學併入」把那幾天併進來。', '月底按「開始下個月」，結存量和尚未進貨數量會自動帶到下個月。', '資料只存在這台電腦的這個瀏覽器，換電腦或清除瀏覽紀錄前，請按「更多 → 備份」。'].map(text => h('li', {
     key: text
   }, text)));
+  const togglePick = key => setBackupPick(backupPick.includes(key) ? backupPick.filter(k => k !== key) : [...backupPick, key]);
+  const backupDialog = backupPick && h('div', {
+    className: 'fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4',
+    onClick: () => setBackupPick(null)
+  }, h('div', {
+    className: 'w-full max-w-sm bg-white rounded-lg shadow-xl p-4 space-y-3 text-sm',
+    onClick: e => e.stopPropagation()
+  }, h('div', {
+    className: 'text-base font-bold text-gray-800'
+  }, '備份哪些月份？'), backupCandidates.length === 0 ? h('div', {
+    className: 'text-gray-500'
+  }, '目前還沒有任何月份有資料。') : h('div', null, h('div', {
+    className: 'flex gap-2 mb-2'
+  }, h('button', {
+    onClick: () => setBackupPick(backupCandidates.some(k => k.key === currentKey) ? [currentKey] : []),
+    className: 'px-2 py-0.5 rounded border border-gray-300 text-xs hover:bg-gray-100'
+  }, '只選本月'), h('button', {
+    onClick: () => setBackupPick(backupCandidates.map(k => k.key)),
+    className: 'px-2 py-0.5 rounded border border-gray-300 text-xs hover:bg-gray-100'
+  }, '全選'), h('button', {
+    onClick: () => setBackupPick([]),
+    className: 'px-2 py-0.5 rounded border border-gray-300 text-xs hover:bg-gray-100'
+  }, '全不選')), h('div', {
+    className: 'max-h-64 overflow-y-auto border border-gray-200 rounded divide-y divide-gray-100'
+  }, backupCandidates.map(k => h('label', {
+    key: k.key,
+    className: 'flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer'
+  }, h('input', {
+    type: 'checkbox',
+    checked: backupPick.includes(k.key),
+    onChange: () => togglePick(k.key)
+  }), h('span', null, getPeriodText(store.sheets[k.key], k.year, k.month)), h('span', {
+    className: 'text-gray-500'
+  }, RICE_TYPES[k.riceType]), k.key === currentKey && h('span', {
+    className: 'ml-auto text-xs text-emerald-700'
+  }, '目前畫面'))))), h('div', {
+    className: 'text-xs text-gray-500'
+  }, '還原時只會更新備份檔裡的月份，其他月份不會被動到。'), h('div', {
+    className: 'flex justify-end gap-2'
+  }, h('button', {
+    onClick: () => setBackupPick(null),
+    className: btnGray
+  }, '取消'), h('button', {
+    onClick: () => handleBackup(backupPick),
+    disabled: !backupPick.length,
+    className: `${btn} bg-blue-600 hover:bg-blue-700 text-white border-blue-600 disabled:opacity-40 disabled:cursor-not-allowed`
+  }, h(DownloadIcon), `下載備份（${backupPick.length} 個月）`))));
   const toolbar = h('div', {
     className: 'print:hidden mb-4 space-y-3'
-  }, header, embeddedNotice, controlPanel, ...notices, checkRow, helpBox);
+  }, header, embeddedNotice, controlPanel, ...notices, checkRow, helpBox, backupDialog);
   const title = h('div', {
     className: 'text-center mb-2 print:mb-1'
   }, h('div', {
